@@ -1,0 +1,446 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { Paths } from "../src/paths.js";
+import { EventBus } from "../src/events.js";
+import { defaultConfig } from "../src/config.js";
+import {
+  AgentRunner,
+  composePrompt,
+  type ProcessSpawner,
+  type SpawnedProcess,
+} from "../src/agent.js";
+import type {
+  Notification,
+  Session,
+  SessionEvent,
+  TaskDef,
+} from "../src/types.js";
+
+async function mkTmp(): Promise<string> {
+  return fs.mkdtemp(path.join(os.tmpdir(), "flow-agent-"));
+}
+
+async function writeSkill(paths: Paths, name: string, body: string): Promise<void> {
+  const file = paths.skillFile(name);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, body, "utf8");
+}
+
+interface Script {
+  stdout: string[];
+  exitCode: number;
+  stderr?: string[];
+  delayMs?: number;
+}
+
+interface FakeCall {
+  bin: string;
+  args: string[];
+  cwd: string;
+  killed: boolean;
+  killSignal?: NodeJS.Signals;
+}
+
+interface FakeSpawnerHandle {
+  spawner: ProcessSpawner;
+  calls: FakeCall[];
+  /** Queue one script per invocation. If none remain, the call yields no stdout and exits 0. */
+  queue: Script[];
+}
+
+function makeFakeSpawner(): FakeSpawnerHandle {
+  const calls: FakeCall[] = [];
+  const queue: Script[] = [];
+  const spawner: ProcessSpawner = ({ bin, args, cwd }) => {
+    const script: Script = queue.shift() ?? { stdout: [], exitCode: 0 };
+    const call: FakeCall = { bin, args, cwd, killed: false };
+    calls.push(call);
+
+    let exitResolve!: (n: number) => void;
+    const exit = new Promise<number>((r) => {
+      exitResolve = r;
+    });
+
+    let stopped = false;
+
+    async function* stdoutGen(): AsyncIterable<string> {
+      try {
+        for (const line of script.stdout) {
+          if (stopped) return;
+          yield line;
+        }
+      } finally {
+        // When stdout iteration completes (or is broken out of), resolve
+        // exit on the next tick so any lingering kill() wins the race.
+        setImmediate(() => exitResolve(script.exitCode));
+      }
+    }
+
+    async function* stderrGen(): AsyncIterable<string> {
+      for (const line of script.stderr ?? []) {
+        if (stopped) return;
+        yield line;
+      }
+    }
+
+    const proc: SpawnedProcess = {
+      stdout: stdoutGen(),
+      stderr: stderrGen(),
+      exit,
+      kill(signal?: NodeJS.Signals) {
+        call.killed = true;
+        call.killSignal = signal;
+        stopped = true;
+        exitResolve(script.exitCode);
+      },
+    };
+
+    return proc;
+  };
+  return { spawner, calls, queue };
+}
+
+function makeRunner(
+  root: string,
+  spawnerHandle: FakeSpawnerHandle,
+): { runner: AgentRunner; paths: Paths; bus: EventBus } {
+  const paths = new Paths(root);
+  const bus = new EventBus();
+  const runner = new AgentRunner({
+    paths,
+    config: defaultConfig(),
+    eventBus: bus,
+    spawner: spawnerHandle.spawner,
+    now: () => new Date(),
+  });
+  return { runner, paths, bus };
+}
+
+// ---------------------------------------------------------------------------
+// composePrompt
+// ---------------------------------------------------------------------------
+
+test("composePrompt includes skill body, task metadata, and context files", async () => {
+  const root = await mkTmp();
+  const paths = new Paths(root);
+  await writeSkill(paths, "exec", "SKILL BODY — do the thing.");
+
+  const task: TaskDef = {
+    id: "T1",
+    title: "Build widget",
+    description: "Creates a new widget component",
+    contextFiles: [],
+    requires: [],
+  };
+
+  const prompt = await composePrompt(
+    { paths },
+    {
+      taskId: "T1",
+      stage: "exec",
+      skillName: "exec",
+      worktreePath: root,
+      task,
+      contextFiles: ["src/a.ts", "src/b.ts"],
+      extraPrompt: "Prev stage notes go here.",
+    },
+  );
+
+  assert.match(prompt, /SKILL BODY/);
+  assert.match(prompt, /# Task/);
+  assert.match(prompt, /Title: Build widget/);
+  assert.match(prompt, /Description: Creates a new widget component/);
+  assert.match(prompt, /# Context files/);
+  assert.match(prompt, /- src\/a\.ts/);
+  assert.match(prompt, /- src\/b\.ts/);
+  assert.match(prompt, /Prior session summaries/);
+  assert.match(prompt, /Prev stage notes/);
+});
+
+test("composePrompt omits sections with no content", async () => {
+  const root = await mkTmp();
+  const paths = new Paths(root);
+  await writeSkill(paths, "exec", "SKILL BODY");
+
+  const prompt = await composePrompt(
+    { paths },
+    {
+      taskId: null,
+      stage: "exec",
+      skillName: "exec",
+      worktreePath: root,
+    },
+  );
+  assert.match(prompt, /SKILL BODY/);
+  assert.doesNotMatch(prompt, /# Task/);
+  assert.doesNotMatch(prompt, /# Context files/);
+  assert.doesNotMatch(prompt, /Prior session/);
+});
+
+test("composePrompt throws with skill name when skill file missing", async () => {
+  const root = await mkTmp();
+  const paths = new Paths(root);
+  await assert.rejects(
+    composePrompt(
+      { paths },
+      {
+        taskId: null,
+        stage: "exec",
+        skillName: "noSuchSkill",
+        worktreePath: root,
+      },
+    ),
+    (err: Error) => /noSuchSkill/.test(err.message),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// spawnAgent — happy path
+// ---------------------------------------------------------------------------
+
+test("spawnAgent happy path: emits events, writes JSONL, computes cost", async () => {
+  const root = await mkTmp();
+  const spawnerHandle = makeFakeSpawner();
+  const { runner, paths, bus } = makeRunner(root, spawnerHandle);
+
+  await writeSkill(paths, "exec", "do the thing");
+
+  const usageLine = JSON.stringify({
+    type: "result",
+    usage: {
+      input_tokens: 1000,
+      output_tokens: 500,
+      cache_read_input_tokens: 2000,
+      cache_creation_input_tokens: 100,
+    },
+  });
+
+  spawnerHandle.queue.push({
+    stdout: [
+      JSON.stringify({ type: "system", subtype: "init", session_id: "abc" }),
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "hello world" }] },
+      }),
+      usageLine,
+    ],
+    exitCode: 0,
+  });
+  // Context probe — return a line with "42%"
+  spawnerHandle.queue.push({
+    stdout: [JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Context: 42%" }] } })],
+    exitCode: 0,
+  });
+
+  const started: Session[] = [];
+  const events: SessionEvent[] = [];
+  const ended: Session[] = [];
+  bus.on("session.started", ({ session }) => started.push(session));
+  bus.on("session.event", ({ event }) => events.push(event));
+  bus.on("session.ended", ({ session }) => ended.push(session));
+
+  const taskId = "T1";
+  const session = await runner.spawnAgent({
+    taskId,
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+    task: {
+      id: taskId,
+      title: "t",
+      description: "d",
+      contextFiles: [],
+      requires: [],
+    },
+  });
+
+  assert.equal(session.status, "succeeded");
+  assert.equal(session.exitCode, 0);
+  assert.equal(session.tokens.input, 1000);
+  assert.equal(session.tokens.output, 500);
+  assert.equal(session.tokens.cacheRead, 2000);
+  assert.equal(session.tokens.cacheCreate, 100);
+  assert.equal(session.tokens.total, 3600);
+  assert.ok(session.costUsd > 0, "cost should be computed");
+  assert.equal(started.length, 1);
+  assert.ok(events.length >= 3, `expected >=3 events, got ${events.length}`);
+  assert.equal(ended.length, 1);
+
+  // JSONL has 3 lines.
+  const raw = await fs.readFile(paths.sessionJsonl(taskId, session.id), "utf8");
+  const lines = raw.trim().split("\n").filter(Boolean);
+  assert.equal(lines.length, 3);
+
+  // Meta file persisted.
+  const meta = JSON.parse(
+    await fs.readFile(paths.sessionMeta(taskId, session.id), "utf8"),
+  );
+  assert.equal(meta.status, "succeeded");
+
+  // Context probe fired as second spawner call.
+  assert.equal(spawnerHandle.calls.length, 2);
+  assert.ok(spawnerHandle.calls[1]!.args.includes("/context"));
+  assert.equal(session.contextPercentage, 42);
+});
+
+// ---------------------------------------------------------------------------
+// FLOW_BLOCKED
+// ---------------------------------------------------------------------------
+
+test("FLOW_BLOCKED marker kills process, emits notification, marks failed", async () => {
+  const root = await mkTmp();
+  const spawnerHandle = makeFakeSpawner();
+  const { runner, paths, bus } = makeRunner(root, spawnerHandle);
+
+  await writeSkill(paths, "exec", "skill");
+
+  spawnerHandle.queue.push({
+    stdout: [
+      JSON.stringify({ type: "system", subtype: "init" }),
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{ type: "text", text: "FLOW_BLOCKED: creds missing" }],
+        },
+      }),
+      // These lines should not matter — we kill after the marker.
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "more" }] } }),
+    ],
+    exitCode: 0,
+  });
+
+  const notifs: Notification[] = [];
+  bus.on("notification", ({ notification }) => notifs.push(notification));
+
+  const session = await runner.spawnAgent({
+    taskId: "T2",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  assert.equal(session.status, "failed");
+  assert.match(session.error ?? "", /FLOW_BLOCKED: creds missing/);
+  assert.equal(notifs.length, 1);
+  assert.equal(notifs[0]!.severity, "blocked");
+  assert.match(notifs[0]!.body, /creds missing/);
+  assert.equal(spawnerHandle.calls[0]!.killed, true);
+  // No context probe should fire for failed session.
+  assert.equal(spawnerHandle.calls.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Autocompact
+// ---------------------------------------------------------------------------
+
+test("autocompact: compact_boundary line + exit 0 yields status=autocompacted", async () => {
+  const root = await mkTmp();
+  const spawnerHandle = makeFakeSpawner();
+  const { runner, bus } = makeRunner(root, spawnerHandle);
+  const paths = new Paths(root);
+  await writeSkill(paths, "exec", "skill");
+
+  spawnerHandle.queue.push({
+    stdout: [
+      JSON.stringify({ type: "system", subtype: "init" }),
+      JSON.stringify({ type: "system", subtype: "compact_boundary" }),
+    ],
+    exitCode: 0,
+  });
+  // Context probe
+  spawnerHandle.queue.push({ stdout: [], exitCode: 0 });
+
+  const updated: Session[] = [];
+  bus.on("session.updated", ({ session }) => updated.push(session));
+
+  const session = await runner.spawnAgent({
+    taskId: "T3",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  assert.equal(session.status, "autocompacted");
+  assert.equal(session.autocompacted, true);
+  assert.equal(session.exitCode, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Nonzero exit
+// ---------------------------------------------------------------------------
+
+test("nonzero exit code yields status=failed with error string", async () => {
+  const root = await mkTmp();
+  const spawnerHandle = makeFakeSpawner();
+  const { runner } = makeRunner(root, spawnerHandle);
+  const paths = new Paths(root);
+  await writeSkill(paths, "exec", "skill");
+
+  spawnerHandle.queue.push({
+    stdout: [JSON.stringify({ type: "system", subtype: "init" })],
+    exitCode: 17,
+  });
+
+  const session = await runner.spawnAgent({
+    taskId: "T4",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  assert.equal(session.status, "failed");
+  assert.equal(session.exitCode, 17);
+  assert.match(session.error ?? "", /17/);
+});
+
+// ---------------------------------------------------------------------------
+// Context probe is best-effort when not scripted
+// ---------------------------------------------------------------------------
+
+test("context probe no-op when spawner has no further script; doesn't throw", async () => {
+  const root = await mkTmp();
+  const spawnerHandle = makeFakeSpawner();
+  const { runner } = makeRunner(root, spawnerHandle);
+  const paths = new Paths(root);
+  await writeSkill(paths, "exec", "skill");
+
+  spawnerHandle.queue.push({
+    stdout: [JSON.stringify({ type: "system", subtype: "init" })],
+    exitCode: 0,
+  });
+  // No context probe script queued — the fake spawner returns empty/exit 0.
+
+  const session = await runner.spawnAgent({
+    taskId: "T5",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  assert.equal(session.status, "succeeded");
+  assert.equal(session.contextPercentage, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// Skill missing → throws
+// ---------------------------------------------------------------------------
+
+test("spawnAgent throws clear error when skill missing", async () => {
+  const root = await mkTmp();
+  const spawnerHandle = makeFakeSpawner();
+  const { runner } = makeRunner(root, spawnerHandle);
+
+  await assert.rejects(
+    runner.spawnAgent({
+      taskId: null,
+      stage: "setup",
+      skillName: "missingSkill",
+      worktreePath: root,
+    }),
+    (err: Error) => /missingSkill/.test(err.message),
+  );
+});
