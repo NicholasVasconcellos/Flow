@@ -1,0 +1,211 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { simpleGit } from "simple-git";
+
+import { Paths } from "../src/paths.js";
+import { GitManager, formatCommitMessage } from "../src/git.js";
+
+async function makeTempProject(): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-git-"));
+  // Resolve any macOS /var -> /private/var symlink so git paths round-trip.
+  return fs.realpath(dir);
+}
+
+async function writeFile(root: string, rel: string, body: string): Promise<void> {
+  const abs = path.join(root, rel);
+  await fs.mkdir(path.dirname(abs), { recursive: true });
+  await fs.writeFile(abs, body, "utf8");
+}
+
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await fs.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+test("formatCommitMessage renders subject + bullets", () => {
+  const out = formatCommitMessage({
+    subject: "Add feature",
+    bullets: ["First bullet", "Second bullet"],
+  });
+  assert.equal(out, "Add feature\n\n- First bullet\n- Second bullet");
+});
+
+test("formatCommitMessage handles empty bullets", () => {
+  const out = formatCommitMessage({ subject: "only subject", bullets: [] });
+  assert.equal(out, "only subject");
+});
+
+test("ensureRepo creates .git + initial commit on empty dir", async () => {
+  const root = await makeTempProject();
+  const paths = new Paths(root);
+  await writeFile(root, ".flow/config.json", "{}\n");
+  await writeFile(root, "README.md", "hello\n");
+
+  const gm = new GitManager(paths, "main");
+  const did = await gm.ensureRepo();
+  assert.equal(did, true);
+  assert.equal(await pathExists(path.join(root, ".git")), true);
+
+  const git = simpleGit(root);
+  const log = await git.log();
+  assert.equal(log.total, 1);
+  const status = await git.status();
+  assert.equal(status.files.length, 0, "all scaffold files should be committed");
+});
+
+test("ensureRepo is a no-op on existing repo", async () => {
+  const root = await makeTempProject();
+  const paths = new Paths(root);
+  const gm = new GitManager(paths, "main");
+
+  await writeFile(root, "a.txt", "one\n");
+  const first = await gm.ensureRepo();
+  assert.equal(first, true);
+
+  const git = simpleGit(root);
+  const logBefore = await git.log();
+  assert.equal(logBefore.total, 1);
+
+  // Add an untracked file; ensureRepo should not commit it.
+  await writeFile(root, "b.txt", "two\n");
+  const second = await gm.ensureRepo();
+  assert.equal(second, false);
+
+  const logAfter = await git.log();
+  assert.equal(logAfter.total, 1, "no new commit produced");
+  const status = await git.status();
+  assert.equal(status.not_added.includes("b.txt"), true);
+});
+
+test("createWorktree / removeWorktree round-trip", async () => {
+  const root = await makeTempProject();
+  const paths = new Paths(root);
+  const gm = new GitManager(paths, "main");
+
+  await writeFile(root, "src/index.ts", "export const x = 1;\n");
+  await gm.ensureRepo();
+
+  const taskId = "01ABC";
+  const { worktreePath, branchName } = await gm.createWorktree(taskId);
+  assert.equal(worktreePath, paths.worktreeDir(taskId));
+  assert.equal(branchName, `flow/${taskId}`);
+  assert.equal(await pathExists(worktreePath), true);
+  assert.equal(await pathExists(path.join(worktreePath, "src/index.ts")), true);
+
+  // Branch should exist.
+  const branchesBefore = await simpleGit(root).branch();
+  assert.ok(branchesBefore.all.includes(branchName));
+
+  await gm.removeWorktree(taskId, { branch: branchName, branchMerged: true });
+  assert.equal(await pathExists(worktreePath), false);
+
+  const branchesAfter = await simpleGit(root).branch();
+  assert.ok(!branchesAfter.all.includes(branchName), "branch deleted when merged=true");
+});
+
+test("commitAllInWorktree produces commit whose message matches the format", async () => {
+  const root = await makeTempProject();
+  const paths = new Paths(root);
+  const gm = new GitManager(paths, "main");
+
+  await writeFile(root, "seed.txt", "seed\n");
+  await gm.ensureRepo();
+
+  const taskId = "01TASK";
+  const { worktreePath } = await gm.createWorktree(taskId);
+  await writeFile(worktreePath, "feature.txt", "shiny new feature\n");
+
+  const msg = {
+    subject: "Add shiny feature",
+    bullets: ["Introduces feature.txt", "Bumps morale"],
+  };
+  const sha = await gm.commitAllInWorktree(taskId, msg);
+  assert.match(sha, /^[0-9a-f]{7,40}$/);
+
+  const wtGit = simpleGit(worktreePath);
+  const log = await wtGit.log({ maxCount: 1 });
+  const latest = log.latest!;
+  const expected = formatCommitMessage(msg);
+  const actual = `${latest.message}${latest.body ? `\n\n${latest.body.trimEnd()}` : ""}`;
+  assert.equal(actual.trim(), expected.trim());
+});
+
+test("mergeTaskIntoMain clean merge succeeds", async () => {
+  const root = await makeTempProject();
+  const paths = new Paths(root);
+  const gm = new GitManager(paths, "main");
+
+  await writeFile(root, "a.txt", "a\n");
+  await gm.ensureRepo();
+
+  const taskId = "01CLEAN";
+  const { worktreePath } = await gm.createWorktree(taskId);
+  await writeFile(worktreePath, "b.txt", "b from task\n");
+  await gm.commitAllInWorktree(taskId, {
+    subject: "Add b.txt",
+    bullets: ["New file"],
+  });
+
+  const result = await gm.mergeTaskIntoMain(taskId);
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.match(result.sha, /^[0-9a-f]{7,40}$/);
+  }
+
+  // Main now contains b.txt.
+  assert.equal(await pathExists(path.join(root, "b.txt")), true);
+
+  // Can clean up worktree + branch.
+  await gm.removeWorktree(taskId, { branch: `flow/${taskId}`, branchMerged: true });
+});
+
+test("mergeTaskIntoMain with a real conflict returns conflictPaths; abortMerge cleans up", async () => {
+  const root = await makeTempProject();
+  const paths = new Paths(root);
+  const gm = new GitManager(paths, "main");
+
+  await writeFile(root, "conflict.txt", "base\n");
+  await gm.ensureRepo();
+
+  // Create worktree from main, modify conflict.txt there.
+  const taskId = "01CONFLICT";
+  const { worktreePath } = await gm.createWorktree(taskId);
+  await writeFile(worktreePath, "conflict.txt", "from task\n");
+  await gm.commitAllInWorktree(taskId, {
+    subject: "Task change",
+    bullets: ["modify conflict.txt"],
+  });
+
+  // Make a competing change on main before merging.
+  const rootGit = simpleGit(root);
+  await writeFile(root, "conflict.txt", "from main\n");
+  await rootGit.add(["-A"]);
+  await rootGit.commit("main conflicting change");
+
+  const result = await gm.mergeTaskIntoMain(taskId);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.conflictPaths.includes("conflict.txt"));
+  }
+
+  // Merge state should be live.
+  const mergeHead = path.join(root, ".git", "MERGE_HEAD");
+  assert.equal(await pathExists(mergeHead), true);
+
+  await gm.abortMerge();
+  assert.equal(await pathExists(mergeHead), false);
+
+  // After abort, conflict.txt reads back as the pre-merge main value.
+  const after = await fs.readFile(path.join(root, "conflict.txt"), "utf8");
+  assert.equal(after, "from main\n");
+
+  // Calling abortMerge again when nothing to abort should not throw.
+  await gm.abortMerge();
+});
