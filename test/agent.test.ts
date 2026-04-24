@@ -124,10 +124,10 @@ function makeRunner(
 // composePrompt
 // ---------------------------------------------------------------------------
 
-test("composePrompt includes skill body, task metadata, and context files", async () => {
+test("composePrompt references skill via @path and includes task + context files", async () => {
   const root = await mkTmp();
   const paths = new Paths(root);
-  await writeSkill(paths, "exec", "SKILL BODY — do the thing.");
+  await writeSkill(paths, "exec", "SKILL BODY");
 
   const task: TaskDef = {
     id: "T1",
@@ -150,7 +150,10 @@ test("composePrompt includes skill body, task metadata, and context files", asyn
     },
   );
 
-  assert.match(prompt, /SKILL BODY/);
+  assert.ok(
+    prompt.startsWith(`@${paths.skillFile("exec")}`),
+    "prompt must begin with @<skill-path>",
+  );
   assert.match(prompt, /# Task/);
   assert.match(prompt, /Title: Build widget/);
   assert.match(prompt, /Description: Creates a new widget component/);
@@ -175,7 +178,7 @@ test("composePrompt omits sections with no content", async () => {
       worktreePath: root,
     },
   );
-  assert.match(prompt, /SKILL BODY/);
+  assert.ok(prompt.startsWith(`@${paths.skillFile("exec")}`));
   assert.doesNotMatch(prompt, /# Task/);
   assert.doesNotMatch(prompt, /# Context files/);
   assert.doesNotMatch(prompt, /Prior session/);

@@ -1,55 +1,76 @@
 ---
 name: docs
-description: Update documentation (README, module docs, CHANGELOG) to reflect the task's code changes.
+description: >
+  Update or create project documentation after a task is implemented.
+  Produces clear explanations, logic flow, API reference, and usage examples.
+  Trigger on: /docs
+disable-model-invocation: true
 ---
 
 # docs
 
-You are Flow's documentation agent. You run after `review` (and its UI
-check) for a single task. You update the documentation that references the
-code this task changed.
+After implementation and review, update the project documentation to reflect changes made by this task.
 
-This skill is **skipped at the orchestrator level when
-`config.hasDocs === false`.** If you are running, docs are in scope.
+## Step 1 — Identify what changed
 
-## Goal
+Read the task description and the files that were modified. Understand:
+- What new functionality was added or changed
+- What APIs, functions, or components were introduced or modified
+- What configuration or setup changed
 
-Keep docs and code in sync. A future reader should be able to tell, from
-the README / module docstrings / CHANGELOG, what this task changed — without
-having to diff the source.
+## Step 2 — Find existing documentation
 
-## How to work
+Check for:
+- `DOCS.md` or `docs/` directory at the project root
+- README.md sections relevant to the changes
+- Inline documentation patterns already in use
+- Any existing API reference files
 
-1. Read `.flow/tasks/<taskId>/summary.md` (especially "Approach" and
-   "Interface changes") and `git diff <mainBranch>...HEAD` to see what
-   actually shipped. They should agree; if they do not, trust the diff.
-2. Identify the documentation surfaces that could be stale:
-   - `README.md` at the project root.
-   - Per-package or per-module `README.md` files near the changed code.
-   - JSDoc/TSDoc comments at the top of changed exports.
-   - `CHANGELOG.md` if the project keeps one.
-   - API reference files (`docs/`, `API.md`, etc.) when present.
-3. For each surface, decide: does this task require an update?
-   - Interface changed → update the reference.
-   - New user-visible behavior → add a section or bullet.
-   - Renamed / deleted export → grep for the old name and update.
-   - Internal refactor with no user-visible change → usually nothing to do.
-4. Make the edits via `Edit`. Keep the prose tight and in the voice of the
-   existing docs. Do not invent new doc files unless the task genuinely
-   warrants one.
-5. If `CHANGELOG.md` exists and follows Keep-a-Changelog or similar, add a
-   one-line entry under the "Unreleased" heading.
+If no documentation structure exists, create `DOCS.md` at the project root.
 
-## Rules
+## Step 3 — Update documentation
 
-- **Do not edit source code.** Docs only. Comments and docstrings inside
-  source files are fair game.
-- Do not create new top-level markdown files unless the project's
-  conventions call for one. Prefer extending existing docs.
-- Never add emojis to documentation unless the surrounding file already
-  uses them.
-- Do not duplicate large chunks of code into docs. Link or reference
-  instead.
+For each significant change, document:
+
+**API Reference** — For every new or modified public function, class, or endpoint:
+- Signature with parameter types and return type
+- One-line description of what it does
+- Usage example (minimal, working code)
+- Edge cases or important constraints
+
+**Logic Flow** — For non-trivial workflows:
+- Step-by-step description of what happens
+- Bullet List with nested bullets for logic flow
+- Decision points and their outcomes
+- Data flow between components
+
+**Configuration** — For any new config, env vars, or setup:
+- What the option does
+- Default value
+- Example usage
+
+## Formatting Rules
+
+- Use clear, concise language — optimize for both human readers and LLM context
+- Prefer tables for parameter lists and option references
+- Use code blocks with language annotations for all examples
+- Keep explanations under 3 sentences per concept — link to code for details
+- Use h2 for major sections, h3 for subsections within
+- Do not duplicate information — reference other sections instead
+
+## Step 4 — Verify accuracy
+
+- Confirm every code example compiles/runs conceptually
+- Confirm function signatures match the actual code
+- Remove documentation for anything that was deleted
+
+## What NOT to do
+
+- Do not document internal/private implementation details unless they affect public behavior
+- Do not add generic boilerplate ("This module provides...")
+- Do not document things that are self-evident from well-named code
+- Do not create separate doc files per task — consolidate into the project's existing doc structure
+- Do not modify source code — only documentation files
 
 If you cannot proceed safely or need human judgment, output a single line:
 `FLOW_BLOCKED: <one-sentence reason>`.

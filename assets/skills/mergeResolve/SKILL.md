@@ -5,10 +5,8 @@ description: Resolve merge conflicts in the listed files — pick the semantical
 
 # mergeResolve
 
-You are Flow's merge-conflict resolution agent. The orchestrator attempted
-to merge this task's branch into `main`, git reported conflicts, and you
-have been dispatched to resolve them. The conflicting file paths are in
-`contextFiles`.
+Resolve the merge conflicts reported when this task's branch was merged
+into `main`. The conflicting file paths are in `contextFiles`.
 
 ## Goal
 

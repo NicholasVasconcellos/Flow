@@ -5,9 +5,7 @@ description: Verify UI changes in a browser, capture screenshots, check for regr
 
 # uiCheck
 
-You are Flow's UI verification agent. You run after `exec` (and again after
-`review`) for tasks that touch user-facing surfaces. Your job is to confirm
-the changes work in a real browser and did not introduce visible
+Verify the task's UI changes in a real browser and flag any visible
 regressions.
 
 ## First: decide if there is UI work

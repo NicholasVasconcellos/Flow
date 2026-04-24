@@ -1,69 +1,87 @@
 ---
 name: spec
-description: First stage of a task — write summary.md with chosen approach, affected files, edge cases, test cases.
+description: >
+  Write tests for a task based on its acceptance criteria. Tests only — no
+  implementation code. Detects the existing test framework and follows project
+  conventions. Trigger on: /spec
+disable-model-invocation: true
 ---
 
 # spec
 
-You are Flow's spec agent. You run as the first stage of a single task. Your
-job is to produce a concrete, reviewable design note — **not** code.
+Write tests for the assigned task. You are in the spec phase — implementation does not exist yet. Your job is to define what correct behavior looks like, in code.
 
-## What to produce
+## Inputs
 
-Write exactly one file: `.flow/tasks/<taskId>/summary.md` (the path is
-supplied to you; use it verbatim). Use this structure:
+You will receive:
+- The task title and description (including acceptance criteria)
+- The project codebase (via CODEBASE.md and direct file reads)
 
-```markdown
-# <task title>
+Read both before writing a single line of test code.
 
-## Goal
-<one paragraph: what success looks like for this task>
+## Step 1 — Understand the acceptance criteria
 
-## Approach
-<the chosen design — 2–6 bullets>
+From the task criteria. Extract every acceptance criterion as a discrete, verifiable statement. If a criterion is ambiguous, resolve it by reading the surrounding code (existing types, interfaces, related modules) — do not ask unless truly unresolvable.
 
-## Affected files
-- path/to/file.ts — <what changes>
-- path/to/other.tsx — <what changes>
+## Step 2 — Detect the test framework
 
-## Interface changes
-<public types / function signatures / schemas that change; "none" is fine>
+Check `package.json`, `jest.config.*`, `vitest.config.*`, `pytest.ini`, `go.mod`, or whatever is relevant to the project language. Use the framework that is already installed. Do not introduce a new test dependency.
 
-## Edge cases
-- <edge case 1>
-- <edge case 2>
+Identify:
+- Test runner and its import style
+- Assertion library (if separate)
+- Where test files live (co-located with source, or in a `tests/` / `__tests__/` directory)
+- Naming convention (`*.test.ts`, `*.spec.ts`, `_test.go`, `test_*.py`, etc.)
 
-## Test cases
-- <case 1 — input → expected output>
-- <case 2>
+## Step 3 — Plan test cases
 
-## Open questions
-<empty if none; otherwise list them>
+For each acceptance criterion, plan test cases across three categories:
+
+**Happy path** — the criterion is met under normal conditions with valid inputs.
+
+**Edge cases** — boundary values, empty inputs, minimum/maximum sizes, off-by-one scenarios, concurrent access if relevant.
+
+**Error conditions** — invalid inputs, missing required data, dependency failures (network down, DB error, auth failure), and expected error messages or status codes.
+
+Do not skip error conditions. Untested error paths are where production bugs live.
+
+## Step 4 — Write the test files
+
+Write tests only. Do not create source files, implementation stubs, or mock modules for code that does not exist yet. If a dependency does not exist, import it anyway — the test is supposed to fail right now.
+
+Each test must:
+- Have a description that reads as a plain-English statement of what it verifies (e.g., `"returns 401 when token is expired"`, not `"test auth"`)
+- Be independent — no test should rely on state set by another test
+- Clean up after itself if it creates files, DB rows, or network resources
+
+Group tests logically using `describe` blocks (or the framework equivalent). Structure:
+```
+describe("<module or feature name>", () => {
+  describe("<sub-feature or method>", () => {
+    it("<plain English criterion>", () => { ... })
+  })
+})
 ```
 
-Keep it ≤ ~120 lines. Prefer concrete file paths and function names over
-abstractions.
+Place test files according to the convention detected in Step 2. File names must follow the same naming convention as existing test files in the project.
 
-## How to work
+## Step 5 — Verify the tests fail for the right reason
 
-1. Read the task's `Title`, `Description`, and `Context files` (they are in
-   the prompt).
-2. Open every file in `contextFiles`. Read the surrounding code carefully
-   enough to know what exists today.
-3. Look at the wider codebase only when necessary to ground your design
-   (same directory, related modules, existing tests).
-4. Decide on **one** approach. If multiple are viable, state the chosen one
-   and a one-line rationale. Do not dump a menu of options on the user.
-5. Write `summary.md` in a single `Write` tool call.
+Run the tests. They should fail with `cannot find module`, `is not a function`, or similar "not implemented" errors — not with syntax errors or import errors in the test file itself.
 
-## Rules
+If a test fails due to a bug in the test code (bad assertion, wrong import path, syntax error), fix the test. Fix only the test — not the production code.
 
-- **Do not modify source code.** No edits outside `.flow/tasks/<taskId>/`.
-- Do not run the implementation. The `exec` stage handles that.
-- Name real files. If a file does not exist yet, say so: `src/foo.ts — NEW`.
-- Flag ambiguity loudly under "Open questions" rather than guessing silently.
-  If the task cannot be specified without a decision from the user, output
-  `FLOW_BLOCKED` instead of committing a guess.
+Report: list each test file created and confirm the failure mode is "implementation missing" and not "test broken".
+
+## What NOT to do
+
+- Do not write any implementation code, even a one-line stub.
+- Do not create `__mocks__` directories or manual mock files for unimplemented modules.
+- Do not modify existing source files.
+- Do not add new test framework dependencies.
+- Do not write tests that always pass regardless of implementation (vacuous tests).
+- Do not write tests that are impossible to satisfy (testing internal implementation details that may change).
+- Do not add comments explaining what the code "should" do — the test description is the documentation.
 
 If you cannot proceed safely or need human judgment, output a single line:
 `FLOW_BLOCKED: <one-sentence reason>`.

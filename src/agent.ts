@@ -57,7 +57,6 @@ export interface AgentRunnerDeps {
   config: Config;
   eventBus: EventBus;
   spawner?: ProcessSpawner;
-  readSkill?: (skillName: string) => Promise<string>;
   now?: () => Date;
 }
 
@@ -67,30 +66,23 @@ const UPDATE_THROTTLE_MS = 1000;
 // Prompt composition (exported for tests)
 // ---------------------------------------------------------------------------
 
-/**
- * Strip a leading YAML frontmatter block from a skill body.
- *
- * Skill files ship with Claude-Code-style frontmatter (`---\n...\n---\n`) so
- * the harness can index them. When we hand the body to `claude -p`, a prompt
- * that starts with `---` is parsed as an unknown option flag by commander
- * and the subprocess exits before doing anything. Drop the frontmatter here
- * — the metadata isn't useful inside a prompt anyway.
- */
-export function stripSkillFrontmatter(body: string): string {
-  if (!body.startsWith("---")) return body;
-  // Match `---` on a line by itself, any content, then `---` on a line by
-  // itself. Keep everything after.
-  const match = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(body);
-  if (!match) return body;
-  return body.slice(match[0].length);
-}
-
 export async function composePrompt(
-  deps: Pick<AgentRunnerDeps, "paths" | "readSkill">,
+  deps: Pick<AgentRunnerDeps, "paths">,
   args: SpawnArgs,
 ): Promise<string> {
-  const skillBody = stripSkillFrontmatter(await loadSkill(deps, args.skillName));
-  const sections: string[] = [skillBody.trim()];
+  // Reference the skill file via Claude Code's `@path` syntax — the subprocess
+  // reads it directly so we avoid inlining 100+ lines of markdown into argv.
+  // Fail-fast here if the file is missing so the caller sees the skill name,
+  // not an opaque subprocess error.
+  const skillPath = deps.paths.skillFile(args.skillName);
+  try {
+    await fs.access(skillPath);
+  } catch {
+    throw new Error(
+      `Skill "${args.skillName}" not found at ${skillPath}. Ensure .flow/skills/${args.skillName}/SKILL.md exists.`,
+    );
+  }
+  const sections: string[] = [`@${skillPath}`];
 
   const task = args.task;
   if (task) {
@@ -145,35 +137,6 @@ export async function composePrompt(
   }
 
   return sections.join("\n\n");
-}
-
-async function loadSkill(
-  deps: Pick<AgentRunnerDeps, "paths" | "readSkill">,
-  skillName: string,
-): Promise<string> {
-  if (deps.readSkill) {
-    try {
-      return await deps.readSkill(skillName);
-    } catch (err) {
-      throw new Error(
-        `Failed to read skill "${skillName}": ${(err as Error).message}`,
-      );
-    }
-  }
-  const file = deps.paths.skillFile(skillName);
-  try {
-    return await fs.readFile(file, "utf8");
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
-      throw new Error(
-        `Skill "${skillName}" not found at ${file}. Ensure .flow/skills/${skillName}/SKILL.md exists.`,
-      );
-    }
-    throw new Error(
-      `Failed to read skill "${skillName}": ${(err as Error).message}`,
-    );
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -456,7 +419,6 @@ export class AgentRunner {
   private readonly config: Config;
   private readonly eventBus: EventBus;
   private readonly spawner: ProcessSpawner;
-  private readonly readSkillFn?: (name: string) => Promise<string>;
   private readonly nowFn: () => Date;
 
   constructor(deps: AgentRunnerDeps) {
@@ -464,7 +426,6 @@ export class AgentRunner {
     this.config = deps.config;
     this.eventBus = deps.eventBus;
     this.spawner = deps.spawner ?? execaSpawner;
-    this.readSkillFn = deps.readSkill;
     this.nowFn = deps.now ?? (() => new Date());
   }
 
@@ -473,10 +434,7 @@ export class AgentRunner {
     const model = args.model ?? this.config.defaults.model;
     const thinkingMode = args.thinkingMode ?? this.config.defaults.thinkingMode;
 
-    const prompt = await composePrompt(
-      { paths: this.paths, readSkill: this.readSkillFn },
-      args,
-    );
+    const prompt = await composePrompt({ paths: this.paths }, args);
 
     // Claude CLI rejects non-UUID session ids, so we mint a UUID specifically
     // for the subprocess and keep it around for the /context follow-up call.
