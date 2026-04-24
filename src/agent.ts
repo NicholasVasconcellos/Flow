@@ -492,6 +492,9 @@ export class AgentRunner {
     let lastUpdateAt = 0;
     let blockedReason: string | null = null;
     let killed = false;
+    let consecutiveRetries = 0;
+    let stale = false;
+    let cliErrorResult: string | null = null;
 
     const flushUpdate = (force: boolean): void => {
       const now = this.nowFn().getTime();
@@ -533,6 +536,43 @@ export class AgentRunner {
           payload,
         };
         this.eventBus.emit("session.event", { event });
+
+        const payloadObj =
+          payload && typeof payload === "object"
+            ? (payload as Record<string, unknown>)
+            : null;
+        const payloadType = payloadObj?.["type"];
+        const payloadSubtype = payloadObj?.["subtype"];
+
+        if (payloadType === "system" && payloadSubtype === "api_retry") {
+          consecutiveRetries += 1;
+          if (consecutiveRetries >= this.config.maxConsecutiveApiRetries) {
+            stale = true;
+            killed = true;
+            try {
+              proc.kill("SIGTERM");
+            } catch {
+              /* ignore */
+            }
+            break;
+          }
+        } else if (
+          payloadType === "stream_event" ||
+          payloadType === "assistant" ||
+          payloadType === "user" ||
+          payloadType === "tool_use" ||
+          payloadType === "tool_result"
+        ) {
+          consecutiveRetries = 0;
+        }
+
+        if (
+          payloadType === "result" &&
+          payloadObj?.["is_error"] === true &&
+          typeof payloadObj["result"] === "string"
+        ) {
+          cliErrorResult = payloadObj["result"] as string;
+        }
 
         if (isCompactBoundary(payload)) {
           session.autocompacted = true;
@@ -590,14 +630,24 @@ export class AgentRunner {
     if (blockedReason) {
       session.status = "failed";
       session.error = `FLOW_BLOCKED: ${blockedReason}`;
+    } else if (stale) {
+      session.status = "failed";
+      session.error = `Session stale: ${consecutiveRetries} consecutive api_retry events with no progress`;
     } else if (exitCode !== 0) {
       session.status = "failed";
       if (!session.error) {
-        const tail = stderrTail.join("\n").trim();
-        session.error = tail
-          ? `Claude exited with code ${exitCode}\n--- stderr ---\n${tail}`
-          : `Claude exited with code ${exitCode}`;
+        if (cliErrorResult) {
+          session.error = cliErrorResult;
+        } else {
+          const tail = stderrTail.join("\n").trim();
+          session.error = tail
+            ? `Claude exited with code ${exitCode}\n--- stderr ---\n${tail}`
+            : `Claude exited with code ${exitCode}`;
+        }
       }
+    } else if (cliErrorResult) {
+      session.status = "failed";
+      if (!session.error) session.error = cliErrorResult;
     } else if (session.autocompacted) {
       session.status = "autocompacted";
     } else {

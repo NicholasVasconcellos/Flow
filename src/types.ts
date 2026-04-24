@@ -157,6 +157,7 @@ export type PricingEntry = z.infer<typeof PricingEntrySchema>;
 export const ConfigSchema = z.object({
   maxConcurrent: z.union([z.number().int().positive(), z.literal("off")]).default(3),
   retryCount: z.number().int().nonnegative().default(0),
+  maxConsecutiveApiRetries: z.number().int().positive().default(5),
   hasDocs: z.boolean().default(true),
   defaults: z.object({
     model: z.string().default("claude-sonnet-4-5"),

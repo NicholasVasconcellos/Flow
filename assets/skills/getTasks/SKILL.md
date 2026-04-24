@@ -68,7 +68,7 @@ For each task, list which other tasks (by title) must complete directly before t
 
 ## Step 4 — Output
 
-**Write `tasks/tasks.json` (relative to the project root). Do not also paste the JSON into your final message.**
+**Write `.flow/tasks.json` (relative to the project root). Do not also paste the JSON into your final message.**
 
 Schema:
 ```json
@@ -110,11 +110,11 @@ List every action the user must take manually before execution can begin — API
 ## What NOT to do
 
 - Do not write any code.
-- Do not create any files other than `CODEBASE.md`, the `docs/` directory, and `tasks/tasks.json`.
+- Do not create any files other than `CODEBASE.md`, the `docs/` directory, and `.flow/tasks.json`.
 - Do not ask clarifying questions unless there are blocking unknowns.
 - Do not pad the task list with generic tasks like "write tests" or "add logging" — testing is handled by a dedicated spec phase; logging is part of implementation.
 - Do not invent constraints that are not in the inputs.
-- Do not paste the tasks JSON into your final message — write `tasks/tasks.json` and reference it.
+- Do not paste the tasks JSON into your final message — write `.flow/tasks.json` and reference it.
 
 If you cannot proceed safely or need human judgment, output a single line:
 `FLOW_BLOCKED: <one-sentence reason>`.
