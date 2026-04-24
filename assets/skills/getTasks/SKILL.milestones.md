@@ -77,7 +77,7 @@ For each milestone, spawn a subagent. Pass it concisely:
 
 - The milestone name, goal, and scope from Step 4
 - The project constraints and conventions from Step 3
-- The **boundary tasks** (exact titles) from upstream milestones that its tasks may reference in `dependsOn`
+- The **boundary tasks** (exact ids) from upstream milestones that its tasks may reference in `requires`
 - Relevant parts of CODEBASE.md (only the files/directories this milestone touches)
 
 Each subagent must return a JSON array of tasks:
@@ -85,10 +85,11 @@ Each subagent must return a JSON array of tasks:
 ```json
 [
   {
-    "title": "string",
+    "id": "string — stable slug, unique across all tasks",
+    "title": "string — human-readable label",
     "description": "string — what to build and the exact acceptance criteria",
     "contextFiles": ["path/to/file1", "path/to/file2"],
-    "dependsOn": ["task title", "..."]
+    "requires": ["task-id-1", "..."]
   }
 ]
 ```
@@ -96,8 +97,9 @@ Each subagent must return a JSON array of tasks:
 Subagent rules:
 
 - A task must be **atomic** (one agent, one session), **concrete** (self-contained description), and **verifiable** (explicit acceptance criteria)
-- `dependsOn` may reference titles within the same milestone OR boundary task titles from upstream milestones — nothing else
-- `title` must be unique and descriptive (it becomes the global identifier)
+- `id` must be a stable slug derived from the title — lowercase, non-alphanumeric runs replaced with `-`, trimmed of leading/trailing `-`, max 64 chars. It must be **unique** across every milestone; on collision, append `-2`, `-3`, etc. This id is the global identifier referenced in `requires`.
+- `title` is the human-readable label. Keep titles distinct so the derived ids stay unique.
+- `requires` may reference ids within the same milestone OR boundary task ids from upstream milestones — nothing else
 - `contextFiles`: file paths auto-loaded into the implementing agent's prompt as `@path` mentions. Goal: give the agent everything it needs so it never has to grep, glob, or open-ended explore. Use `CODEBASE.md` as the source-of-truth.
   - Example Include: files the task will edit; files whose types/APIs/exports the task calls; one or two exemplar files showing the pattern to mirror; parent index/barrel files if symbols are re-exported; relevant `docs/<lib>/...` files for libraries this task uses.
   - Exclude: `CODEBASE.md`, `package.json`, `tsconfig.json`, lockfiles, `node_modules`/`dist`/generated dirs; very large files (>1k lines) unless essential; tangentially related files.
@@ -109,22 +111,23 @@ Spawn subagents for independent milestones in parallel when possible.
 
 ## Step 6 — Flatten into a milestone-agnostic DAG (main agent)
 
-Collect task arrays from all subagents. Merge them into a single flat task list. Milestones are now only labels — execution order is determined entirely by explicit `dependsOn` edges.
+Collect task arrays from all subagents. Merge them into a single flat task list. Milestones are now only labels — execution order is determined entirely by explicit `requires` edges.
 
-For every task, review and finalize its `dependsOn`:
+For every task, review and finalize its `requires`:
 
 1. **Keep** any within-milestone dependencies the subagent set
 2. **Keep** any cross-milestone boundary task dependencies the subagent set
-3. **Add missing cross-milestone edges**: if a task has no `dependsOn` entries but belongs to a milestone with upstream milestones, it MUST depend on at least one boundary task from each upstream milestone. Milestone ordering that is not encoded as an explicit `dependsOn` edge is invisible to the runner and will cause parallel execution of tasks that should be sequential
-4. **Remove milestone assumptions**: do not rely on milestone order for anything. The flat `dependsOn` list is the sole source of execution order
+3. **Add missing cross-milestone edges**: if a task has no `requires` entries but belongs to a milestone with upstream milestones, it MUST depend on at least one boundary task id from each upstream milestone. Milestone ordering that is not encoded as an explicit `requires` edge is invisible to the runner and will cause parallel execution of tasks that should be sequential
+4. **Remove milestone assumptions**: do not rely on milestone order for anything. The flat `requires` list is the sole source of execution order
 
 Then validate:
 
-1. **Title uniqueness**: no duplicate titles across milestones. If collisions exist, prefix with milestone name
-2. **Dependency integrity**: every `dependsOn` reference resolves to an existing task title. Flag and fix any broken references
-3. **No cycles**: the full DAG is acyclic
-4. **Completeness**: every boundary task listed in Step 4 actually exists in the output
-5. **No orphaned downstream tasks**: no task from a downstream milestone has an empty `dependsOn` unless it genuinely has zero prerequisites across the entire project
+1. **Id uniqueness**: no duplicate `id` values across milestones. If a collision would occur, either rename the title so the derived slug differs or append a `-2`/`-3` suffix.
+2. **Title distinctness**: keep titles distinct enough that derived slugs don't silently collide. If two milestones truly need the same title, prefix the id with the milestone slug.
+3. **Dependency integrity**: every `requires` reference resolves to an existing task `id`. Flag and fix any broken references.
+4. **No cycles**: the full DAG is acyclic
+5. **Completeness**: every boundary task listed in Step 4 actually exists in the output
+6. **No orphaned downstream tasks**: no task from a downstream milestone has an empty `requires` unless it genuinely has zero prerequisites across the entire project
 
 Fix any issues found.
 
@@ -141,10 +144,11 @@ Schema:
       "name": "string",
       "tasks": [
         {
-          "title": "string",
+          "id": "string — stable slug, unique across all tasks",
+          "title": "string — human-readable label",
           "description": "string — what to build and the exact acceptance criteria",
           "contextFiles": ["path/to/file1", "path/to/file2"],
-          "dependsOn": ["task title", "..."]
+          "requires": ["task-id-1", "..."]
         }
       ]
     }
@@ -152,14 +156,15 @@ Schema:
 }
 ```
 
-The `milestones` grouping is retained for readability only. Execution ignores it — only `dependsOn` matters.
+The `milestones` grouping is retained for readability only. Execution ignores it — only `requires` matters.
 
 Rules for the JSON output:
 
-- `title` is unique across all milestones
+- `id` is unique across all milestones and derived from the title as a slug (see Step 5)
+- `title` is the human-readable label; keep titles distinct enough that derived slugs don't collide
 - `description` is self-contained — a fresh agent must be able to read it and know exactly what to implement and how to verify it is done
 - `contextFiles` carries forward exactly as the subagent set it. Omit or use `[]` if none — see Step 5 for selection rules
-- `dependsOn` references `title` strings exactly as written; use `[]` only if the task has zero prerequisites across the entire project
+- `requires` references `id` strings exactly (not titles); use `[]` only if the task has zero prerequisites across the entire project
 
 ## Step 8 — Post-output checklist
 
