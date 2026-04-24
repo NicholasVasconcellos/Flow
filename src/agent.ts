@@ -127,7 +127,7 @@ export async function composePrompt(
 
   const ctx = args.contextFiles ?? [];
   if (ctx.length > 0) {
-    const lines = ["# Context files", ...ctx.map((p) => `- ${p}`)];
+    const lines = ["# Context files", ...ctx.map((p) => `@${p}`)];
     sections.push(lines.join("\n"));
   }
 

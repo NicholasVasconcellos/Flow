@@ -222,6 +222,7 @@ test("ensureTasksLoaded: no tasks.json → agent writes one, defs returned and s
   const root = await mkTmp();
   const paths = new Paths(root);
   await scaffoldFlowDir(paths, ASSETS_DIR);
+  await fs.writeFile(paths.planMd, "# test plan\n", "utf8");
 
   const eventBus = new EventBus();
   const state = new StateStore(paths);
@@ -297,6 +298,7 @@ test("ensureTasksLoaded: hasDocs=false skips setup session", async () => {
   const root = await mkTmp();
   const paths = new Paths(root);
   await scaffoldFlowDir(paths, ASSETS_DIR);
+  await fs.writeFile(paths.planMd, "# test plan\n", "utf8");
 
   const state = new StateStore(paths);
   await state.load();
@@ -373,6 +375,7 @@ test("runGetTasksSession: surfaces schema failure clearly", async () => {
   const root = await mkTmp();
   const paths = new Paths(root);
   await scaffoldFlowDir(paths, ASSETS_DIR);
+  await fs.writeFile(paths.planMd, "# test plan\n", "utf8");
 
   const state = new StateStore(paths);
   await state.load();

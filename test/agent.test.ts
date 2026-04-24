@@ -158,8 +158,8 @@ test("composePrompt references skill via @path and includes task + context files
   assert.match(prompt, /Title: Build widget/);
   assert.match(prompt, /Description: Creates a new widget component/);
   assert.match(prompt, /# Context files/);
-  assert.match(prompt, /- src\/a\.ts/);
-  assert.match(prompt, /- src\/b\.ts/);
+  assert.match(prompt, /@src\/a\.ts/);
+  assert.match(prompt, /@src\/b\.ts/);
   assert.match(prompt, /Prior session summaries/);
   assert.match(prompt, /Prev stage notes/);
 });

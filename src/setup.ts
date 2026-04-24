@@ -178,12 +178,77 @@ export async function runSetupSession(deps: SetupDeps): Promise<void> {
  * wrote, validate it against the schema and the DAG invariants, then return
  * the parsed task defs.
  */
+export interface PlanLookup {
+  path: string | null;
+  searched: string[];
+}
+
+/**
+ * Locate a plan/PRD markdown document the getTasks agent should decompose.
+ *
+ * Search order (first match wins, all comparisons case-insensitive):
+ *   1. Project root — any `*.md` whose stem is exactly `plan` or `prd`, or
+ *      contains the substring `plan`.
+ *   2. `./plan/` directory at project root — any `*.md` file inside.
+ *
+ * Returns the absolute path of the first hit plus a human-readable trail of
+ * every location inspected, so callers can build a diagnostic error message.
+ */
+export async function findPlan(projectRoot: string): Promise<PlanLookup> {
+  const searched: string[] = [];
+
+  const rootEntries = await fs.readdir(projectRoot, { withFileTypes: true });
+  searched.push(
+    `${projectRoot}: *.md with stem "plan", "prd", or containing "plan" (case-insensitive)`,
+  );
+  for (const entry of rootEntries) {
+    if (!entry.isFile()) continue;
+    const lower = entry.name.toLowerCase();
+    if (!lower.endsWith(".md")) continue;
+    const stem = lower.slice(0, -3);
+    if (stem === "plan" || stem === "prd" || stem.includes("plan")) {
+      return { path: path.join(projectRoot, entry.name), searched };
+    }
+  }
+
+  const planDirEntry = rootEntries.find(
+    (e) => e.isDirectory() && e.name.toLowerCase() === "plan",
+  );
+  if (planDirEntry) {
+    const planDirPath = path.join(projectRoot, planDirEntry.name);
+    searched.push(`${planDirPath}/: any *.md file`);
+    const dirEntries = await fs.readdir(planDirPath, { withFileTypes: true });
+    for (const entry of dirEntries) {
+      if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
+        return { path: path.join(planDirPath, entry.name), searched };
+      }
+    }
+  } else {
+    searched.push(`${path.join(projectRoot, "plan")}/: directory not present`);
+  }
+
+  return { path: null, searched };
+}
+
 export async function runGetTasksSession(deps: SetupDeps): Promise<TaskDef[]> {
+  const lookup = await findPlan(deps.paths.projectRoot);
+  if (!lookup.path) {
+    const msg = [
+      `No plan document found. getTasks requires a plan/PRD markdown file.`,
+      `Searched:`,
+      ...lookup.searched.map((s) => `  - ${s}`),
+      `Place a plan document at one of those locations and retry.`,
+    ].join("\n");
+    await emitError(deps, msg);
+    throw new Error(msg);
+  }
+
   await deps.agent.spawnAgent({
     taskId: null,
     stage: "getTasks",
     skillName: "getTasks",
     worktreePath: deps.paths.projectRoot,
+    contextFiles: [lookup.path],
   });
 
   return readAndValidateTasksFile(deps);
