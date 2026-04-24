@@ -225,6 +225,32 @@ export class Scheduler {
     return recovered;
   }
 
+  /** Flip paused and/or blocked tasks back to `ready` so the next `runAll`
+   *  drain picks them up. Mirrors the per-task reset in `retryTask` but leaves
+   *  scheduling to the drain loop so `maxConcurrent` is respected. */
+  async resumePausedTasks(opts?: {
+    status?: "paused" | "blocked" | "all";
+  }): Promise<TaskRuntime[]> {
+    const filter = opts?.status ?? "all";
+    const resumed: TaskRuntime[] = [];
+    for (const task of this.state.getTasks()) {
+      const match =
+        filter === "all"
+          ? task.status === "paused" || task.status === "blocked"
+          : task.status === filter;
+      if (!match) continue;
+      task.status = "ready";
+      task.retries = 0;
+      task.lastError = undefined;
+      task.updatedAt = nowIso();
+      this.state.upsertTask(task);
+      resumed.push(task);
+      this.eventBus.emit("task.upsert", { task: { ...task } });
+    }
+    if (resumed.length > 0) await this.saveState();
+    return resumed;
+  }
+
   async retryTask(taskId: string): Promise<void> {
     const task = this.state.getTask(taskId);
     if (!task) return;

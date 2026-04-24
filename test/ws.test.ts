@@ -108,6 +108,9 @@ function makeFakeFlow(): { flow: Flow; ctx: FakeFlowState } {
     async retryTask(id) {
       ctx.retryCalls.push(id);
     },
+    async resumePausedTasks() {
+      return [];
+    },
     async cancelTask(id) {
       ctx.cancelCalls.push(id);
     },

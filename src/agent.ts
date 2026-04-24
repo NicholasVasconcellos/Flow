@@ -62,6 +62,13 @@ export interface AgentRunnerDeps {
 
 const UPDATE_THROTTLE_MS = 1000;
 
+// Grace window after a child process exits before we force its stdio streams
+// shut. Claude spawns MCP-server grandchildren that inherit the stdout/stderr
+// pipe FDs; they can keep the pipe open indefinitely after the direct child
+// exits, stalling both the stdout `for await` loop and execa's exit promise
+// (which waits for stdio close). See `execaSpawner`.
+const STDIO_DRAIN_GRACE_MS = 2_000;
+
 // ---------------------------------------------------------------------------
 // Prompt composition (exported for tests)
 // ---------------------------------------------------------------------------
@@ -389,6 +396,14 @@ function execaSpawner(args: {
     buffer: false,
     reject: false,
     stdin: "ignore",
+  });
+
+  // Force-close stdio after the grace window — see STDIO_DRAIN_GRACE_MS.
+  child.on("exit", () => {
+    setTimeout(() => {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    }, STDIO_DRAIN_GRACE_MS).unref();
   });
 
   const exit: Promise<number> = child.then(

@@ -50,6 +50,9 @@ export interface Flow {
   runAllOnce(opts?: { limit?: number }): Promise<TaskRuntime[]>;
   runAll(opts?: { limit?: number }): Promise<void>;
   retryTask(taskId: string): Promise<void>;
+  resumePausedTasks(opts?: {
+    status?: "paused" | "blocked" | "all";
+  }): Promise<TaskRuntime[]>;
   cancelTask(taskId: string): Promise<void>;
 
   watch(): void;
@@ -182,6 +185,12 @@ class FlowImpl implements Flow {
 
   async retryTask(taskId: string): Promise<void> {
     await this.scheduler.retryTask(taskId);
+  }
+
+  async resumePausedTasks(opts?: {
+    status?: "paused" | "blocked" | "all";
+  }): Promise<TaskRuntime[]> {
+    return this.scheduler.resumePausedTasks(opts);
   }
 
   async cancelTask(taskId: string): Promise<void> {

@@ -563,6 +563,50 @@ program
   });
 
 program
+  .command("resume-all")
+  .description("reset all paused/blocked tasks to ready and drain the queue")
+  .option("--limit <n>", "max tasks", (v) => Number.parseInt(v, 10))
+  .option(
+    "--status <status>",
+    "paused | blocked | all (default: all)",
+    "all",
+  )
+  .action(
+    async (opts: {
+      limit?: number;
+      status?: "paused" | "blocked" | "all";
+    }) => {
+      const flow = await createFlow({ projectPath: process.cwd() });
+      installSigintHandler(flow);
+      const unsubscribe = subscribeToFlow(flow);
+      const spinner = ora("Preparing tasks...").start();
+      try {
+        await flow.ensureTasksLoaded();
+        spinner.stop();
+        const resumed = await flow.resumePausedTasks({ status: opts.status });
+        if (resumed.length === 0) {
+          // eslint-disable-next-line no-console
+          console.log(chalk.dim("No paused tasks to resume."));
+          return;
+        }
+        // eslint-disable-next-line no-console
+        console.log(
+          chalk.cyan(
+            `Resuming ${resumed.length} task(s): ${resumed.map((t) => t.id).join(", ")}`,
+          ),
+        );
+        await flow.runAll(opts.limit ? { limit: opts.limit } : undefined);
+      } catch (err) {
+        spinner.fail(`resume-all failed: ${(err as Error).message}`);
+        process.exitCode = 1;
+      } finally {
+        unsubscribe();
+        flow.stop();
+      }
+    },
+  );
+
+program
   .command("cancel <taskId>")
   .description("cancel a running task")
   .action(async (taskId: string) => {
