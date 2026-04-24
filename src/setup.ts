@@ -1,0 +1,317 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import chokidar from "chokidar";
+
+import { EventBus } from "./events.js";
+import { StateStore } from "./state.js";
+import { GitManager } from "./git.js";
+import { AgentRunner } from "./agent.js";
+import { Paths } from "./paths.js";
+import { ensureDir, exists, readJsonIfExists, writeJsonAtomic } from "./atomic.js";
+import { defaultConfig, loadConfig, saveConfig } from "./config.js";
+import { validateDag, DagError } from "./dag.js";
+import { newId, nowIso } from "./ids.js";
+import {
+  TasksFileSchema,
+  type Config,
+  type Notification,
+  type ProjectStatus,
+  type State,
+  type TaskDef,
+} from "./types.js";
+
+// ---------------------------------------------------------------------------
+// Public types
+// ---------------------------------------------------------------------------
+
+export interface SetupDeps {
+  paths: Paths;
+  config: Config;
+  state: StateStore;
+  git: GitManager;
+  agent: AgentRunner;
+  eventBus: EventBus;
+}
+
+export interface InitOpts {
+  assetsDir?: string;
+  git: GitManager;
+}
+
+// ---------------------------------------------------------------------------
+// Assets resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Locate the bundled `assets/` directory that ships with the package.
+ *
+ * Production layout: `dist/setup.js` → `../assets/` lives next to `dist/`.
+ * Dev layout (tsx): `src/setup.ts` → `../assets/` sits next to `src/`.
+ * Both reduce to "../assets" from the module's directory.
+ */
+export function resolveBundledAssetsDir(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(here, "..", "assets");
+}
+
+// ---------------------------------------------------------------------------
+// Project status
+// ---------------------------------------------------------------------------
+
+export async function resolveProjectStatus(paths: Paths): Promise<ProjectStatus> {
+  const hasPlan = await exists(paths.planMd);
+  if (!hasPlan) return "empty";
+
+  const hasConfig = await exists(paths.configJson);
+  if (!hasConfig) return "uninitialized";
+
+  const hasTasks = await exists(paths.tasksJson);
+  if (!hasTasks) return "uninitialized";
+
+  return "ready";
+}
+
+// ---------------------------------------------------------------------------
+// Scaffolding
+// ---------------------------------------------------------------------------
+
+/**
+ * Create `.flow/`, copy default skills from `assetsDir/skills/*` into
+ * `.flow/skills/*`, write a default `config.json`, and initialise an empty
+ * `state.json` — all idempotently. User files already present are not
+ * overwritten.
+ */
+export async function scaffoldFlowDir(
+  paths: Paths,
+  assetsDir: string,
+): Promise<void> {
+  await ensureDir(paths.flowDir);
+  await ensureDir(paths.skillsDir);
+  await ensureDir(paths.tasksDir);
+  await ensureDir(paths.projectSessionsDir);
+  await ensureDir(paths.worktreesDir);
+  await ensureDir(paths.learningsDir);
+  await ensureDir(paths.suggestionsDir);
+
+  // Copy skills. Skip files that already exist so user edits survive.
+  const srcSkills = path.join(assetsDir, "skills");
+  try {
+    await fs.access(srcSkills);
+    await copySkillsTree(srcSkills, paths.skillsDir);
+  } catch {
+    // No bundled skills — leave the directory empty.
+  }
+
+  // Config.
+  if (!(await exists(paths.configJson))) {
+    await saveConfig(paths, defaultConfig());
+  }
+
+  // State.
+  if (!(await exists(paths.stateJson))) {
+    const emptyState: State = {
+      version: 1,
+      tasks: [],
+      sessions: [],
+      updatedAt: nowIso(),
+    };
+    await writeJsonAtomic(paths.stateJson, emptyState);
+  }
+}
+
+async function copySkillsTree(src: string, dest: string): Promise<void> {
+  const entries = await fs.readdir(src, { withFileTypes: true });
+  for (const entry of entries) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      await ensureDir(destPath);
+      await copySkillsTree(srcPath, destPath);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    // Preserve user-edited files: never overwrite.
+    if (await exists(destPath)) continue;
+    await ensureDir(path.dirname(destPath));
+    await fs.copyFile(srcPath, destPath);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// initProject
+// ---------------------------------------------------------------------------
+
+/**
+ * Initialise a Flow project: scaffold `.flow/`, ensure the git repo exists.
+ *
+ * Does NOT auto-run setup/getTasks — those are triggered on project open via
+ * `ensureTasksLoaded` so the UI can render progress around them.
+ */
+export async function initProject(paths: Paths, opts: InitOpts): Promise<void> {
+  const assetsDir = opts.assetsDir ?? resolveBundledAssetsDir();
+  await scaffoldFlowDir(paths, assetsDir);
+  await opts.git.ensureRepo();
+}
+
+// ---------------------------------------------------------------------------
+// Sessions: setup + getTasks
+// ---------------------------------------------------------------------------
+
+/**
+ * Run the `setup` skill at project level. Skipped if `config.hasDocs`
+ * is false. Project-level sessions carry `taskId = null`.
+ */
+export async function runSetupSession(deps: SetupDeps): Promise<void> {
+  if (deps.config.hasDocs === false) return;
+  await deps.agent.spawnAgent({
+    taskId: null,
+    stage: "setup",
+    skillName: "setup",
+    worktreePath: deps.paths.projectRoot,
+  });
+}
+
+/**
+ * Run the `getTasks` skill at project level, read the `tasks.json` the agent
+ * wrote, validate it against the schema and the DAG invariants, then return
+ * the parsed task defs.
+ */
+export async function runGetTasksSession(deps: SetupDeps): Promise<TaskDef[]> {
+  await deps.agent.spawnAgent({
+    taskId: null,
+    stage: "getTasks",
+    skillName: "getTasks",
+    worktreePath: deps.paths.projectRoot,
+  });
+
+  return readAndValidateTasksFile(deps);
+}
+
+async function readAndValidateTasksFile(deps: SetupDeps): Promise<TaskDef[]> {
+  let raw: unknown;
+  try {
+    raw = await readJsonIfExists<unknown>(deps.paths.tasksJson);
+  } catch (err) {
+    const msg = `Invalid tasks.json: ${(err as Error).message}`;
+    await emitError(deps, msg);
+    throw new Error(msg);
+  }
+  if (raw === null) {
+    const msg = `No tasks.json found at ${deps.paths.tasksJson} after getTasks session`;
+    await emitError(deps, msg);
+    throw new Error(msg);
+  }
+
+  const parsed = TasksFileSchema.safeParse(raw);
+  if (!parsed.success) {
+    const msg = `Invalid tasks.json: ${parsed.error.message}`;
+    await emitError(deps, msg);
+    throw new Error(msg);
+  }
+
+  try {
+    validateDag(parsed.data.tasks);
+  } catch (err) {
+    const code = err instanceof DagError ? err.code : "INVALID";
+    const msg = `Invalid DAG in tasks.json (${code}): ${(err as Error).message}`;
+    await emitError(deps, msg);
+    throw new Error(msg);
+  }
+
+  return parsed.data.tasks;
+}
+
+async function emitError(deps: SetupDeps, body: string): Promise<void> {
+  const notification: Notification = {
+    id: newId(),
+    severity: "error",
+    title: "Task definitions could not be loaded",
+    body,
+    createdAt: nowIso(),
+    acknowledged: false,
+  };
+  try {
+    await deps.state.appendNotification(notification);
+  } catch {
+    /* best-effort */
+  }
+  deps.eventBus.emit("notification", { notification });
+  deps.eventBus.emit("error", { message: body });
+}
+
+/**
+ * If `tasks.json` already exists, parse + validate + return it. Otherwise
+ * run setup (when hasDocs) then getTasks, sync the resulting defs into the
+ * state store, and return them.
+ */
+export async function ensureTasksLoaded(deps: SetupDeps): Promise<TaskDef[]> {
+  const tasksExists = await exists(deps.paths.tasksJson);
+  if (tasksExists) {
+    const defs = await readAndValidateTasksFile(deps);
+    // Keep runtime state in sync with whatever is on disk.
+    await deps.state.load();
+    deps.state.syncFromTaskDefs(defs);
+    deps.state.recomputeReadiness();
+    await deps.state.save();
+    return defs;
+  }
+
+  await runSetupSession(deps);
+  const defs = await runGetTasksSession(deps);
+
+  await deps.state.load();
+  deps.state.syncFromTaskDefs(defs);
+  deps.state.recomputeReadiness();
+  await deps.state.save();
+
+  return defs;
+}
+
+// ---------------------------------------------------------------------------
+// Plan watcher
+// ---------------------------------------------------------------------------
+
+/**
+ * Watch `plan.md` for changes. Returns a disposer. `onChange` is called at
+ * most once per 250ms burst.
+ */
+export function watchPlan(paths: Paths, onChange: () => void): () => void {
+  const watcher = chokidar.watch(paths.planMd, {
+    ignoreInitial: true,
+    awaitWriteFinish: { stabilityThreshold: 50, pollInterval: 20 },
+  });
+
+  let timer: NodeJS.Timeout | null = null;
+  const fire = (): void => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      try {
+        onChange();
+      } catch {
+        /* swallow — the caller is responsible for error handling */
+      }
+    }, 250);
+  };
+
+  watcher.on("add", fire);
+  watcher.on("change", fire);
+  watcher.on("unlink", fire);
+
+  let closed = false;
+  return () => {
+    if (closed) return;
+    closed = true;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    void watcher.close();
+  };
+}
+
+// Keep `Config` + `loadConfig` reachable from callers that import from this
+// module as a one-stop setup surface.
+export { loadConfig };
