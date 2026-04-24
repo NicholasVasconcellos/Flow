@@ -229,9 +229,15 @@ class FlowImpl implements Flow {
   async updateConfig(patch: Partial<Config>): Promise<Config> {
     const next = mergeConfigPatch(this.config, patch);
     await saveConfig(this.paths, next);
-    this.config = next;
-    this.eventBus.emit("config", { config: next });
-    return next;
+    // Mutate the shared config reference in place so downstream holders
+    // (Scheduler, AgentRunner) observe the new values without rewiring.
+    // Clear top-level keys that shouldn't linger, then assign from `next`.
+    for (const key of Object.keys(this.config) as Array<keyof Config>) {
+      delete (this.config as Record<string, unknown>)[key];
+    }
+    Object.assign(this.config, next);
+    this.eventBus.emit("config", { config: this.config });
+    return this.config;
   }
 
   async ensureTasksLoaded(): Promise<void> {

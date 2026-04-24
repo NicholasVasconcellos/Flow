@@ -359,6 +359,9 @@ export class Scheduler {
       ...(extraPrompt ? { extraPrompt } : {}),
     });
 
+    // Persist the session so replaySession can find its JSONL later.
+    this.state.upsertSession(session);
+
     // Record session id regardless of outcome.
     task = this.requireTask(taskId);
     if (!task.sessionIds.includes(session.id)) {
@@ -453,6 +456,8 @@ export class Scheduler {
       task: taskDefView(task),
       contextFiles: task.contextFiles,
     });
+
+    this.state.upsertSession(session);
 
     task = this.requireTask(taskId);
     if (!task.sessionIds.includes(session.id)) {
@@ -569,6 +574,8 @@ export class Scheduler {
         task: taskDefView(task),
         contextFiles: result.conflictPaths,
       });
+
+      this.state.upsertSession(session);
 
       const t2 = this.requireTask(taskId);
       if (!t2.sessionIds.includes(session.id)) {
