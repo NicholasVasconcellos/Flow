@@ -103,6 +103,10 @@ export const SessionSchema = z.object({
   autocompacted: z.boolean(),
   costUsd: z.number().nonnegative(),
   parentSessionId: z.string().optional(),
+  /** Claude Code's `--session-id` UUID — kept so a follow-up call (e.g. the
+   *  `/context` probe) can resume into the same session. Distinct from `id`
+   *  because the claude CLI rejects any non-UUID string. */
+  claudeSessionId: z.string().optional(),
   exitCode: z.number().int().optional(),
   error: z.string().optional(),
 });

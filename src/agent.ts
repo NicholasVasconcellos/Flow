@@ -5,7 +5,7 @@ import { execa, type ExecaError, type ResultPromise } from "execa";
 import { Paths } from "./paths.js";
 import { EventBus } from "./events.js";
 import { costFor } from "./config.js";
-import { newId, nowIso } from "./ids.js";
+import { newClaudeSessionId, newId, nowIso } from "./ids.js";
 import { appendJsonl, writeJsonAtomic } from "./atomic.js";
 import type {
   Config,
@@ -67,11 +67,29 @@ const UPDATE_THROTTLE_MS = 1000;
 // Prompt composition (exported for tests)
 // ---------------------------------------------------------------------------
 
+/**
+ * Strip a leading YAML frontmatter block from a skill body.
+ *
+ * Skill files ship with Claude-Code-style frontmatter (`---\n...\n---\n`) so
+ * the harness can index them. When we hand the body to `claude -p`, a prompt
+ * that starts with `---` is parsed as an unknown option flag by commander
+ * and the subprocess exits before doing anything. Drop the frontmatter here
+ * — the metadata isn't useful inside a prompt anyway.
+ */
+export function stripSkillFrontmatter(body: string): string {
+  if (!body.startsWith("---")) return body;
+  // Match `---` on a line by itself, any content, then `---` on a line by
+  // itself. Keep everything after.
+  const match = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(body);
+  if (!match) return body;
+  return body.slice(match[0].length);
+}
+
 export async function composePrompt(
   deps: Pick<AgentRunnerDeps, "paths" | "readSkill">,
   args: SpawnArgs,
 ): Promise<string> {
-  const skillBody = await loadSkill(deps, args.skillName);
+  const skillBody = stripSkillFrontmatter(await loadSkill(deps, args.skillName));
   const sections: string[] = [skillBody.trim()];
 
   const task = args.task;
@@ -79,9 +97,40 @@ export async function composePrompt(
     const title = (task.title ?? "").trim();
     const desc = (task.description ?? "").trim();
     const parts: string[] = ["# Task"];
+    parts.push(`ID: ${task.id}`);
     if (title) parts.push(`Title: ${title}`);
     if (desc) parts.push(`Description: ${desc}`);
-    if (parts.length > 1) sections.push(parts.join("\n"));
+    sections.push(parts.join("\n"));
+  }
+
+  // Make the worktree / main-project split explicit. Without this, agents
+  // see a `<taskId>` placeholder and either guess a slug (writing artifacts
+  // to the wrong directory) or extrapolate from absolute artifact paths to
+  // write source code into the main project — stomping on other tasks'
+  // worktrees.
+  if (args.taskId && deps.paths) {
+    const summaryPath = deps.paths.taskSummary(args.taskId);
+    const screenshotsDir = deps.paths.taskScreenshotsDir(args.taskId);
+    sections.push(
+      [
+        "# Runtime paths",
+        `Task ID: ${args.taskId}`,
+        `Worktree (your cwd): ${args.worktreePath}`,
+        "",
+        "Source code: **edit files only inside the worktree above**. Use paths",
+        "relative to cwd (e.g. `src/foo.ts`) or absolute paths that begin with",
+        "the worktree path. Never touch files under any other project root.",
+        "",
+        "Task artefacts (summary.md, screenshots) are written to the main",
+        "project's `.flow/tasks/<taskId>/` directory so they survive worktree",
+        "removal. Use these absolute paths verbatim:",
+        `  summary.md:       ${summaryPath}`,
+        `  screenshots dir:  ${screenshotsDir}`,
+        "",
+        "Whenever the skill body refers to `<taskId>` or to `.flow/tasks/<taskId>/...`,",
+        "substitute the Task ID above and the absolute artefact paths above.",
+      ].join("\n"),
+    );
   }
 
   const ctx = args.contextFiles ?? [];
@@ -429,6 +478,10 @@ export class AgentRunner {
       args,
     );
 
+    // Claude CLI rejects non-UUID session ids, so we mint a UUID specifically
+    // for the subprocess and keep it around for the /context follow-up call.
+    const claudeSessionId = newClaudeSessionId();
+
     const session: Session = {
       id: sessionId,
       taskId: args.taskId,
@@ -443,6 +496,7 @@ export class AgentRunner {
       tokens: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, total: 0 },
       autocompacted: false,
       costUsd: 0,
+      claudeSessionId,
       ...(args.parentSessionId ? { parentSessionId: args.parentSessionId } : {}),
     };
 
@@ -451,7 +505,7 @@ export class AgentRunner {
     const argv = buildClaudeArgv({
       prompt,
       model,
-      sessionId,
+      sessionId: claudeSessionId,
     });
 
     const jsonlPath = this.paths.sessionJsonl(args.taskId, sessionId);
@@ -462,12 +516,14 @@ export class AgentRunner {
       cwd: args.worktreePath,
     });
 
-    // Drain stderr in the background; we don't process it but keep lines
-    // flowing so the stream doesn't back-pressure.
+    // Drain stderr, keeping the last ~40 lines so failures surface a reason.
+    const stderrTail: string[] = [];
+    const STDERR_TAIL_MAX = 40;
     void (async () => {
       try {
-        for await (const _line of proc.stderr) {
-          // No-op; real implementation might want to tail this for errors.
+        for await (const line of proc.stderr) {
+          stderrTail.push(line);
+          if (stderrTail.length > STDERR_TAIL_MAX) stderrTail.shift();
         }
       } catch {
         /* ignore */
@@ -579,7 +635,10 @@ export class AgentRunner {
     } else if (exitCode !== 0) {
       session.status = "failed";
       if (!session.error) {
-        session.error = `Claude exited with code ${exitCode}`;
+        const tail = stderrTail.join("\n").trim();
+        session.error = tail
+          ? `Claude exited with code ${exitCode}\n--- stderr ---\n${tail}`
+          : `Claude exited with code ${exitCode}`;
       }
     } else if (session.autocompacted) {
       session.status = "autocompacted";
@@ -591,7 +650,7 @@ export class AgentRunner {
     if (session.status !== "failed" && !killed) {
       try {
         const pct = await this.probeContextPercentage(
-          sessionId,
+          claudeSessionId,
           args.worktreePath,
           model,
         );
