@@ -159,6 +159,9 @@ interface FakeGitOptions {
   >;
   /** If true, first call to `completeMerge` throws before succeeding. */
   completeMergeThrowsFirst?: boolean;
+  /** Paths (subset of conflictPaths) that `scanForConflictMarkers` should
+   *  report as still containing conflict markers. Defaults to none. */
+  markerScanReturns?: string[];
 }
 
 interface FakeGitHandle {
@@ -225,6 +228,10 @@ function makeFakeGit(
 
     async abortMerge() {
       /* no-op */
+    },
+
+    async scanForConflictMarkers(_relPaths: readonly string[]) {
+      return opts.markerScanReturns ? [...opts.markerScanReturns] : [];
     },
   };
 
@@ -583,6 +590,84 @@ test(
     assert.equal(h.git.mergeCalls.A, 1, "merge is not retried after resolve");
   },
 );
+
+test(
+  "mergeResolve that leaves conflict markers pauses the task and aborts the merge",
+  { timeout: 10000 },
+  async () => {
+    const h = await makeHarness({
+      taskDefs: [mkTaskDef("A")],
+      gitOpts: {
+        initialMergeResult: {
+          A: { ok: false, conflictPaths: ["a.ts", "b.ts"] },
+        },
+        markerScanReturns: ["a.ts"],
+      },
+    });
+
+    const t = await h.scheduler.runTask("A");
+    assert.equal(t.status, "paused");
+    assert.equal(h.git.completeMergeCalls, 0, "completeMerge must not run");
+    assert.ok(t.lastError, "lastError should be populated");
+    assert.match(t.lastError!.message, /conflict markers/);
+    assert.match(t.lastError!.message, /a\.ts/);
+    const notif = h.notifications.find((n) => n.title.includes("merge"));
+    assert.ok(notif, "a merge-paused notification should be emitted");
+  },
+);
+
+test(
+  "recoverStaleTasks resets status=running tasks to paused with an error",
+  async () => {
+    const h = await makeHarness({
+      taskDefs: [mkTaskDef("A"), mkTaskDef("B"), mkTaskDef("C")],
+    });
+    // Simulate a previous orchestrator crash mid-run.
+    const a = h.state.getTask("A")!;
+    a.status = "running";
+    a.stage = "exec";
+    h.state.upsertTask(a);
+    const b = h.state.getTask("B")!;
+    b.status = "ready";
+    h.state.upsertTask(b);
+    const c = h.state.getTask("C")!;
+    c.status = "running";
+    c.stage = "code_review";
+    h.state.upsertTask(c);
+    await h.state.save();
+
+    // Drain upserts emitted by makeHarness's initial sync.
+    h.upserts.length = 0;
+
+    const recovered = await h.scheduler.recoverStaleTasks();
+    assert.equal(recovered.length, 2);
+    const ids = recovered.map((t) => t.id).sort();
+    assert.deepEqual(ids, ["A", "C"]);
+
+    assert.equal(h.state.getTask("A")!.status, "paused");
+    assert.equal(h.state.getTask("B")!.status, "ready", "non-running untouched");
+    assert.equal(h.state.getTask("C")!.status, "paused");
+
+    const aErr = h.state.getTask("A")!.lastError!;
+    assert.equal(aErr.stage, "exec");
+    assert.match(aErr.message, /Orchestrator/);
+    const cErr = h.state.getTask("C")!.lastError!;
+    assert.equal(cErr.stage, "code_review");
+
+    // Both recovered tasks should have emitted task.upsert events.
+    const upsertIds = new Set(h.upserts.map((t) => t.id));
+    assert.ok(upsertIds.has("A"));
+    assert.ok(upsertIds.has("C"));
+  },
+);
+
+test("recoverStaleTasks is a no-op when nothing is running", async () => {
+  const h = await makeHarness({ taskDefs: [mkTaskDef("A")] });
+  h.upserts.length = 0;
+  const recovered = await h.scheduler.recoverStaleTasks();
+  assert.deepEqual(recovered, []);
+  assert.equal(h.upserts.length, 0);
+});
 
 // ---------------------------------------------------------------------------
 // hasDocs=false

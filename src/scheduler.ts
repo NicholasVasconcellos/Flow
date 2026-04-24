@@ -197,6 +197,34 @@ export class Scheduler {
     }
   }
 
+  /** Reset tasks left in `status=running` by a previous orchestrator crash
+   *  or kill. Call once at Flow startup — when the Scheduler is fresh there
+   *  is no live worker for anything, so any task still flagged as `running`
+   *  is an orphan from a previous process. */
+  async recoverStaleTasks(): Promise<TaskRuntime[]> {
+    const recovered: TaskRuntime[] = [];
+    for (const task of this.state.getTasks()) {
+      if (task.status !== "running") continue;
+      task.status = "paused";
+      task.lastError = {
+        stage: task.stage,
+        message:
+          "Orchestrator exited while this task was running; reset on startup.",
+        at: nowIso(),
+      };
+      task.updatedAt = nowIso();
+      this.state.upsertTask(task);
+      recovered.push(task);
+    }
+    if (recovered.length > 0) {
+      await this.saveState();
+      for (const t of recovered) {
+        this.eventBus.emit("task.upsert", { task: { ...t } });
+      }
+    }
+    return recovered;
+  }
+
   async retryTask(taskId: string): Promise<void> {
     const task = this.state.getTask(taskId);
     if (!task) return;
@@ -597,6 +625,25 @@ export class Scheduler {
         return this.mergePause(
           taskId,
           session.error ?? "mergeResolve session failed",
+        );
+      }
+
+      // Guard against the agent staging a "resolved" file whose body still
+      // contains <<<<<<< / ======= / >>>>>>> markers — `git commit --no-edit`
+      // would otherwise ship them to main because the index is technically
+      // resolved once the file is staged.
+      const unresolved = await this.git.scanForConflictMarkers(
+        result.conflictPaths,
+      );
+      if (unresolved.length > 0) {
+        try {
+          await this.git.abortMerge();
+        } catch {
+          /* ignore */
+        }
+        return this.mergePause(
+          taskId,
+          `mergeResolve left conflict markers in: ${unresolved.join(", ")}`,
         );
       }
 

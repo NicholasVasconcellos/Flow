@@ -223,6 +223,31 @@ export class GitManager {
     return (await git.revparse(["HEAD"])).trim();
   }
 
+  /** Return the subset of `relPaths` (relative to the project root) whose
+   *  file contents still contain literal conflict markers. A mergeResolve
+   *  agent that stages a file without editing out `<<<<<<<` / `=======` /
+   *  `>>>>>>>` leaves git's index technically resolved, so `git commit` will
+   *  happily ship the markers to main. The scheduler calls this before
+   *  completeMerge() to catch that case.
+   *
+   *  Missing/unreadable files are skipped — an agent legitimately resolving
+   *  a conflict by deleting the file should not trip this check. */
+  async scanForConflictMarkers(relPaths: readonly string[]): Promise<string[]> {
+    const unresolved: string[] = [];
+    const marker = /^(<{7}|={7}|>{7})(\s|$)/m;
+    for (const rel of relPaths) {
+      const abs = path.join(this.paths.projectRoot, rel);
+      let body: string;
+      try {
+        body = await fs.readFile(abs, "utf8");
+      } catch {
+        continue;
+      }
+      if (marker.test(body)) unresolved.push(rel);
+    }
+    return unresolved;
+  }
+
   async abortMerge(): Promise<void> {
     try {
       await this.rootGit.raw(["merge", "--abort"]);

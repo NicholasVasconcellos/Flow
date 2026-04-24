@@ -433,6 +433,11 @@ export async function createFlow(
     eventBus,
   });
 
+  // Clear out any tasks left `status=running` by a previous orchestrator
+  // that was killed mid-run. No worker exists yet in this fresh process,
+  // so everything flagged as running is an orphan.
+  await scheduler.recoverStaleTasks();
+
   // If tasks.json already exists, sync defs into state + recompute readiness.
   // We do this via setupEnsureTasksLoaded, which is a no-op agent call when
   // tasks.json is already present.

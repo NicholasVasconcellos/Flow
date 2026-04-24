@@ -209,3 +209,58 @@ test("mergeTaskIntoMain with a real conflict returns conflictPaths; abortMerge c
   // Calling abortMerge again when nothing to abort should not throw.
   await gm.abortMerge();
 });
+
+test("scanForConflictMarkers flags files whose contents still contain markers", async () => {
+  const root = await makeTempProject();
+  const paths = new Paths(root);
+  const gm = new GitManager(paths, "main");
+  await gm.ensureRepo();
+
+  await writeFile(
+    root,
+    "unresolved.ts",
+    [
+      "const before = 1;",
+      "<<<<<<< HEAD",
+      'const x = "ours";',
+      "=======",
+      'const x = "theirs";',
+      ">>>>>>> flow/TASK",
+      "const after = 2;",
+    ].join("\n"),
+  );
+  await writeFile(root, "clean.ts", 'const resolved = "value";\n');
+  await writeFile(
+    root,
+    "equals-in-body.ts",
+    "const sevenEquals = '=======';\n// inline, not a marker on its own line\n",
+  );
+
+  const unresolved = await gm.scanForConflictMarkers([
+    "unresolved.ts",
+    "clean.ts",
+    "equals-in-body.ts",
+    "does-not-exist.ts",
+  ]);
+
+  assert.deepEqual(unresolved.sort(), ["unresolved.ts"]);
+});
+
+test("scanForConflictMarkers flags all three marker variants independently", async () => {
+  const root = await makeTempProject();
+  const paths = new Paths(root);
+  const gm = new GitManager(paths, "main");
+  await gm.ensureRepo();
+
+  await writeFile(root, "only-start.ts", "a\n<<<<<<< HEAD\nb\n");
+  await writeFile(root, "only-sep.ts", "a\n=======\nb\n");
+  await writeFile(root, "only-end.ts", "a\n>>>>>>> branch\nb\n");
+
+  const flagged = await gm.scanForConflictMarkers([
+    "only-start.ts",
+    "only-sep.ts",
+    "only-end.ts",
+  ]);
+
+  assert.deepEqual(flagged.sort(), ["only-end.ts", "only-sep.ts", "only-start.ts"]);
+});
