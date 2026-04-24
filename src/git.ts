@@ -123,12 +123,22 @@ export class GitManager {
     }
   }
 
+  /** Stage every change in the task's worktree. Must run before the
+   *  `commit` skill so its `git diff --cached` sees the actual payload. */
+  async stageAllInWorktree(taskId: string): Promise<void> {
+    const git = simpleGit(this.paths.worktreeDir(taskId));
+    await this.ensureUserIdentity(git);
+    await git.add(["-A"]);
+  }
+
   async commitAllInWorktree(
     taskId: string,
     message: CommitMessage,
   ): Promise<string> {
     const git = simpleGit(this.paths.worktreeDir(taskId));
     await this.ensureUserIdentity(git);
+    // Re-stage in case the commit agent introduced new files or the caller
+    // skipped stageAllInWorktree; this is idempotent.
     await git.add(["-A"]);
     const body = formatCommitMessage(message);
     await git.commit(body, { "--allow-empty": null });

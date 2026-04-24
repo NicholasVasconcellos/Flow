@@ -448,6 +448,15 @@ export class Scheduler {
 
     const worktreePath = task.worktreePath!;
 
+    // Stage everything BEFORE the commit agent runs so its `git diff --cached`
+    // shows the actual payload. Otherwise the agent sees nothing staged and
+    // correctly emits FLOW_BLOCKED per its skill contract.
+    try {
+      await this.git.stageAllInWorktree(taskId);
+    } catch {
+      /* best-effort; commitAllInWorktree re-stages idempotently */
+    }
+
     const session = await this.agent.spawnAgent({
       taskId,
       stage: "commit",

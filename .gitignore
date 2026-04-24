@@ -10,3 +10,4 @@ dist/
 .flow/tasks/*/screenshots/
 coverage/
 .tmp/
+.claude/
