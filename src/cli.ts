@@ -12,8 +12,11 @@ import { Paths } from "./paths.js";
 import { loadConfig, mergeConfigPatch, saveConfig } from "./config.js";
 import { readJsonlLines } from "./atomic.js";
 import { topoSort } from "./dag.js";
+import { startWsServer, type WsServer } from "./ws.js";
 import type { Flow } from "./flow.js";
 import type { Config, SessionEvent, TaskRuntime } from "./types.js";
+
+const FLOW_VERSION = "0.1.0";
 
 // ---------------------------------------------------------------------------
 // Render helpers
@@ -583,31 +586,40 @@ program
   .option("--port <n>", "port", (v) => Number.parseInt(v, 10))
   .action(async (opts: { port?: number }) => {
     const flow = await createFlow({ projectPath: process.cwd() });
-    try {
-      const wsSpecifier = "./ws.js";
-      const mod: unknown = await import(/* @vite-ignore */ wsSpecifier).catch(
-        (err: Error) => {
-          // eslint-disable-next-line no-console
-          console.error(
-            chalk.red(
-              `ws server not available: ${err.message}. Did you build src/ws.ts?`,
-            ),
-          );
-          process.exit(1);
-        },
-      );
-      const record = mod as { startWsServer?: (args: unknown) => Promise<unknown> };
-      const start = record.startWsServer;
-      if (typeof start !== "function") {
-        // eslint-disable-next-line no-console
-        console.error(chalk.red("ws server not yet implemented (startWsServer missing)"));
-        process.exit(1);
+    let server: WsServer | null = null;
+    let fired = false;
+    const handler = (): void => {
+      if (fired) {
+        process.exit(130);
       }
-      installSigintHandler(flow);
+      fired = true;
+      // eslint-disable-next-line no-console
+      console.log(
+        chalk.yellow("\n[flow] interrupt received — stopping ws server..."),
+      );
+      void (async () => {
+        try {
+          if (server) await server.close();
+        } catch {
+          /* ignore */
+        }
+        try {
+          flow.stop();
+        } catch {
+          /* ignore */
+        }
+        process.exit(130);
+      })();
+    };
+    process.on("SIGINT", handler);
+
+    try {
       const port = opts.port ?? flow.getConfig().ws.port;
       // eslint-disable-next-line no-console
       console.log(chalk.cyan(`[flow] starting ws server on :${port}`));
-      await start({ flow, port });
+      server = await startWsServer({ flow, port, version: FLOW_VERSION });
+      // eslint-disable-next-line no-console
+      console.log(chalk.green(`[flow] listening on ws://127.0.0.1:${server.port}`));
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error(chalk.red(`serve failed: ${(err as Error).message}`));

@@ -8,3 +8,5 @@ export {
   type FlowOverrides,
 } from "./flow.js";
 export { EventBus } from "./events.js";
+export { startWsServer, type WsServer, type WsServerOpts } from "./ws.js";
+export type { ClientCommand, ServerEvent } from "./wsProtocol.js";
