@@ -24,4 +24,4 @@ The symmetric advance rule introduced in `6ba7cd9` requires both `signal.status 
 
 Introduce `stageCommitsExpected(stage: AgentStage): boolean` (returns false for `exec_ui_check` and `code_review_ui_check`; true otherwise). In the symmetric advance rule, replace `headMoved` with `(headMoved || !stageCommitsExpected(stage))`. The error message at L546 should change accordingly — for read-only stages, signal=done alone is sufficient.
 
-For `code_review` and `documentation`, defer for now (they may produce commits and the conservative behavior is acceptable). If they prove flaky in practice, add them to the read-only set.
+`code_review` was added to the read-only set after it surfaced the same way (clean review = no findings = no commits) on the same task. `documentation` stays strict because missing docs is a real failure mode worth catching.

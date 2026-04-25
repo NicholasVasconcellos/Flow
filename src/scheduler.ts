@@ -70,12 +70,15 @@ export function stageSkill(stage: AgentStage): string {
 }
 
 /** Read-only stages don't produce commits — UI checks are observational
- *  (uiCheck/SKILL.md forbids editing application code). For these stages,
- *  a `done` signal is sufficient to advance, with no HEAD-moved requirement. */
+ *  (uiCheck/SKILL.md forbids editing application code) and code_review's
+ *  happy path is "no findings, nothing to commit." For these stages, a
+ *  `done` signal is sufficient to advance, with no HEAD-moved requirement.
+ *  documentation stays strict because missing docs is a real failure mode. */
 export function stageCommitsExpected(stage: AgentStage): boolean {
   switch (stage) {
     case "exec_ui_check":
     case "code_review_ui_check":
+    case "code_review":
       return false;
     default:
       return true;
