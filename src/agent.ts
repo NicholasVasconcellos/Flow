@@ -176,6 +176,7 @@ export async function composePrompt(
         "3. When the acceptance checks for this stage pass, commit your changes:",
         '   `git add -A && git commit -m "<imperative subject ≤72 chars>"`.',
         "   Body bullets describing each meaningful change are encouraged.",
+        "   Untracked files alone don't block the stage, but still `git add -A && git commit` to capture any legitimate new tracked work.",
         "4. Write the stage signal and stop:",
         `   echo '{"stage":"${args.stage}","status":"done"}' > ${stageSignalPath}`,
         '   (use `"status":"blocked","reason":"…"` instead if you cannot proceed).',

@@ -94,6 +94,21 @@ export class GitManager {
       this.mainBranch,
     ]);
 
+    // Best-effort: stamp the worktree's per-clone exclude file with cache
+    // paths for toolchains that regenerate state out-of-band. Without this,
+    // the project's `.gitignore` is the only line of defence, and when it's
+    // missing the orchestrator's commit pipeline keeps "rediscovering"
+    // untracked cache dirs every build.
+    try {
+      await this.stampToolchainExcludes(worktreePath);
+    } catch (err) {
+      console.warn(
+        `[flow] worktree exclude stamping failed for ${taskId}: ${
+          (err as Error).message
+        }`,
+      );
+    }
+
     // Seed an empty progress.txt for cross-stage notes. It lives under the
     // task artefacts dir (outside the worktree) so it survives worktree
     // removal and is the single carry-over between stages.
@@ -108,13 +123,72 @@ export class GitManager {
     return { worktreePath, branchName };
   }
 
-  /** True iff the task's worktree has any uncommitted changes (staged or
-   *  unstaged or untracked). Used by the scheduler to decide whether the
-   *  commit_recovery agent needs to run after a stage. */
+  /** Append toolchain-specific cache paths to the worktree's
+   *  `.git/info/exclude`. Conservative — only runs for projects we know
+   *  regenerate cache state out-of-band, and only adds well-known cache
+   *  paths (never source dirs). Idempotent: lines already present are
+   *  skipped. */
+  private async stampToolchainExcludes(worktreePath: string): Promise<void> {
+    const additions: string[] = [];
+
+    // Godot 4: `.godot/` is the editor cache, `*.import` are auto-generated
+    // import metadata. Both regenerate on every editor run.
+    if (await pathExists(path.join(this.paths.projectRoot, "project.godot"))) {
+      additions.push(".godot/", "*.import");
+    }
+
+    if (additions.length === 0) return;
+
+    // In a worktree, `.git` is a file pointing at the real gitdir under the
+    // main repo's `worktrees/<name>/`. Resolve it via `git rev-parse` rather
+    // than guessing.
+    const wtGit = simpleGit(worktreePath);
+    const gitDirRaw = await wtGit.raw(["rev-parse", "--git-dir"]);
+    const gitDir = gitDirRaw.trim();
+    const absGitDir = path.isAbsolute(gitDir)
+      ? gitDir
+      : path.resolve(worktreePath, gitDir);
+    const excludePath = path.join(absGitDir, "info", "exclude");
+
+    await fs.mkdir(path.dirname(excludePath), { recursive: true });
+
+    let existing = "";
+    try {
+      existing = await fs.readFile(excludePath, "utf8");
+    } catch {
+      /* file doesn't exist yet — treat as empty */
+    }
+
+    const have = new Set(
+      existing
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0 && !l.startsWith("#")),
+    );
+    const missing = additions.filter((line) => !have.has(line));
+    if (missing.length === 0) return;
+
+    const prefix =
+      existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
+    const block = `${prefix}# flow: toolchain cache excludes\n${missing.join("\n")}\n`;
+    await fs.appendFile(excludePath, block);
+  }
+
+  /** True iff the task's worktree has any uncommitted changes to **tracked**
+   *  files (staged or unstaged). Untracked paths are deliberately ignored —
+   *  toolchains like Godot/Unity regenerate cache dirs (`.godot/`, `Library/`)
+   *  out-of-band, and counting them here loops `commit_recovery` forever
+   *  (every `git add -A` re-creates the same untracked state on the next
+   *  build). The scheduler's pause-trigger gate uses this; if you need to
+   *  detect untracked work for a different reason, write a different helper. */
   async hasUncommittedChanges(taskId: string): Promise<boolean> {
     const git = simpleGit(this.paths.worktreeDir(taskId));
     try {
-      const out = await git.raw(["status", "--porcelain"]);
+      const out = await git.raw([
+        "status",
+        "--porcelain",
+        "--untracked-files=no",
+      ]);
       return out.trim().length > 0;
     } catch {
       return false;
