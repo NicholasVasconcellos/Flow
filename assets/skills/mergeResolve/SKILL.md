@@ -5,6 +5,12 @@ description: Resolve merge conflicts in the listed files — pick the semantical
 
 # mergeResolve
 
+You are running in the **main checkout** (not a task worktree) mid
+`git merge`. Conflict markers live in the listed files relative to your
+current working directory. Do not `cd` anywhere. Do not run `git commit`
+— the orchestrator runs `git commit --no-edit` after you exit. Just
+resolve markers, stage the files, and stop.
+
 The orchestrator started a merge that hit conflicts. Your prompt's
 `extraPrompt` lists the conflicting paths and the resolution rule.
 

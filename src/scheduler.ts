@@ -627,12 +627,13 @@ export class Scheduler {
 
     if (!result.ok) {
       const task = this.requireTask(taskId);
-      const worktreePath = task.worktreePath!;
+      // mergeResolve runs in the main checkout (where the merge is in
+      // progress and conflict markers live), not the task's worktree.
       const session = await this.agent.spawnAgent({
         taskId,
         stage: "mergeResolve",
         skillName: "mergeResolve",
-        worktreePath,
+        worktreePath: this.paths.projectRoot,
         task: taskDefView(task),
         contextFiles: result.conflictPaths,
         extraPrompt: [
