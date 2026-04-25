@@ -1,4 +1,6 @@
 import { promises as fs } from "node:fs";
+import { exec as execCallback } from "node:child_process";
+import { promisify } from "node:util";
 import path from "node:path";
 import { execa, type ExecaError, type ResultPromise } from "execa";
 
@@ -15,9 +17,12 @@ import type {
   SessionEvent,
   SessionEventKind,
   StageKey,
+  SurplusChild,
   TaskDef,
   ThinkingMode,
 } from "./types.js";
+
+const execAsync = promisify(execCallback);
 
 export interface SpawnArgs {
   taskId: string | null;
@@ -48,6 +53,9 @@ export interface SpawnedProcess {
   /** Resolves with the final exit code. */
   exit: Promise<number>;
   kill(signal?: NodeJS.Signals): void;
+  /** OS PID of the spawned process, if available. Used by the end-of-session
+   *  process-tree probe (`pgrep -P pid`) to record any surviving children. */
+  readonly pid?: number;
 }
 
 export type ProcessSpawner = (args: {
@@ -348,6 +356,89 @@ function hasToolUseBlock(payload: unknown): boolean {
   return check(obj["content"]);
 }
 
+/** Yield each `tool_use` block found in an event payload. Bash invocations
+ *  may arrive either as a top-level `{type:"tool_use"}` event or embedded as
+ *  a content block on an `assistant` event. */
+function* iterToolUseBlocks(
+  payload: unknown,
+): Generator<{ name: string; input: unknown }> {
+  if (!payload || typeof payload !== "object") return;
+  const obj = payload as Record<string, unknown>;
+  const visit = function* (
+    block: unknown,
+  ): Generator<{ name: string; input: unknown }> {
+    if (!block || typeof block !== "object") return;
+    const b = block as Record<string, unknown>;
+    if (b["type"] === "tool_use") {
+      const name = typeof b["name"] === "string" ? (b["name"] as string) : "";
+      yield { name, input: b["input"] };
+    }
+  };
+  if (obj["type"] === "tool_use") {
+    const name = typeof obj["name"] === "string" ? (obj["name"] as string) : "";
+    yield { name, input: obj["input"] };
+  }
+  const message = obj["message"];
+  if (message && typeof message === "object") {
+    const c = (message as Record<string, unknown>)["content"];
+    if (Array.isArray(c)) for (const b of c) yield* visit(b);
+  }
+  const c = obj["content"];
+  if (Array.isArray(c)) for (const b of c) yield* visit(b);
+}
+
+/** Pull the Bash `command` string out of a tool_use input. Returns null for
+ *  non-Bash tools or malformed inputs. The CLI emits `Bash` (capitalized);
+ *  match case-insensitively to be defensive against future changes. */
+function extractBashCommandFromBlock(block: {
+  name: string;
+  input: unknown;
+}): string | null {
+  if (block.name.toLowerCase() !== "bash") return null;
+  if (!block.input || typeof block.input !== "object") return null;
+  const cmd = (block.input as Record<string, unknown>)["command"];
+  return typeof cmd === "string" ? cmd : null;
+}
+
+/** True if `error` is the non-retryable repeat-tool-call sentinel. */
+export function isLoopedOnBlockedTool(err: string | undefined): boolean {
+  return !!err && err.trimStart().startsWith("looped_on_blocked_tool:");
+}
+
+/** Best-effort: returns true if the payload carries a non-empty `tool_result`
+ *  block. Used by the wall-clock stall watchdog so that a hung child tool
+ *  (which never produces output) is not treated as progress. */
+function hasNonEmptyToolResult(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object") return false;
+  const obj = payload as Record<string, unknown>;
+  const isNonEmpty = (block: unknown): boolean => {
+    if (!block || typeof block !== "object") return false;
+    const b = block as Record<string, unknown>;
+    if (b["type"] !== "tool_result") return false;
+    const content = b["content"];
+    if (typeof content === "string") return content.trim().length > 0;
+    if (Array.isArray(content)) {
+      return content.some((c) => {
+        if (!c || typeof c !== "object") return false;
+        const cc = c as Record<string, unknown>;
+        if (typeof cc["text"] === "string") {
+          return (cc["text"] as string).trim().length > 0;
+        }
+        return Object.keys(cc).length > 0;
+      });
+    }
+    return false;
+  };
+  const message = obj["message"];
+  if (message && typeof message === "object") {
+    const c = (message as Record<string, unknown>)["content"];
+    if (Array.isArray(c) && c.some(isNonEmpty)) return true;
+  }
+  const c = obj["content"];
+  if (Array.isArray(c) && c.some(isNonEmpty)) return true;
+  return false;
+}
+
 function hasToolResultBlock(payload: unknown): boolean {
   if (!payload || typeof payload !== "object") return false;
   const obj = payload as Record<string, unknown>;
@@ -464,7 +555,49 @@ function execaSpawner(args: {
         /* no-op */
       }
     },
+    pid: child.pid,
   };
+}
+
+// ---------------------------------------------------------------------------
+// E3 — process-tree probe at session end
+// ---------------------------------------------------------------------------
+
+/** Run `pgrep -P <pid> -l` and parse any surviving children. Returns [] when
+ *  there are no children, when `pgrep` is missing, or on any other error —
+ *  this is forensic-only and must never tear down a session. */
+export async function probeSurplusChildren(
+  pid: number,
+): Promise<SurplusChild[]> {
+  let stdout = "";
+  try {
+    const result = await execAsync(`pgrep -P ${pid} -l`, { timeout: 2000 });
+    stdout = (result.stdout ?? "").toString();
+  } catch (err) {
+    // pgrep exits 1 when no processes match; execAsync rejects in that case
+    // but the rejection still carries stdout (which is empty). Anything else
+    // (ENOENT for missing binary, ETIMEDOUT, signal) we just swallow.
+    const e = err as NodeJS.ErrnoException & { stdout?: string | Buffer };
+    if (e.stdout != null) {
+      stdout = typeof e.stdout === "string" ? e.stdout : e.stdout.toString();
+    } else {
+      return [];
+    }
+  }
+  const out: SurplusChild[] = [];
+  for (const line of stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    // `pgrep -l` formats as "<pid> <name>".
+    const m = /^(\d+)\s+(.+)$/.exec(trimmed);
+    if (!m) continue;
+    const childPid = Number(m[1]);
+    const name = (m[2] ?? "").trim();
+    if (Number.isFinite(childPid) && childPid > 0 && name.length > 0) {
+      out.push({ pid: childPid, name });
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -582,6 +715,35 @@ export class AgentRunner {
     let stale = false;
     let cliErrorResult: string | null = null;
 
+    // Watchdog state — see E1/E2 in the GUI-stall plan.
+    const stallTimeoutMs =
+      stageCfg.stallTimeoutMs ?? this.config.stallTimeoutMs;
+    const repeatToolCallCap =
+      stageCfg.repeatToolCallCap ?? this.config.repeatToolCallCap;
+    let stallTimer: NodeJS.Timeout | null = null;
+    let stalledByWatchdog = false;
+    let loopedToolKey: string | null = null;
+    let loopedToolCount = 0;
+    /** Hash of `(toolName, command)` -> count, scoped to this session. */
+    const bashCallCounts = new Map<string, number>();
+
+    const armStallTimer = (): void => {
+      if (stallTimer) clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => {
+        stalledByWatchdog = true;
+        killed = true;
+        try {
+          proc.kill("SIGTERM");
+        } catch {
+          /* ignore */
+        }
+      }, stallTimeoutMs);
+      // Don't keep the event loop alive solely on this timer.
+      stallTimer.unref?.();
+    };
+    const bumpProgress = (): void => armStallTimer();
+    armStallTimer();
+
     const flushUpdate = (force: boolean): void => {
       const now = this.nowFn().getTime();
       if (!force && now - lastUpdateAt < UPDATE_THROTTLE_MS) return;
@@ -652,6 +814,41 @@ export class AgentRunner {
           consecutiveRetries = 0;
         }
 
+        // E1: wall-clock progress watchdog. Only assistant text and non-empty
+        // tool_result events count — tool_use bookkeeping and thinking frames
+        // can fire continuously while a child is hung on a GUI modal.
+        if (kind === "assistant_text") {
+          const txt = extractAssistantText(payload).trim();
+          if (txt.length > 0) bumpProgress();
+        } else if (kind === "tool_result") {
+          if (hasNonEmptyToolResult(payload)) bumpProgress();
+        }
+
+        // E2: same-Bash-command repeat cap. Inspect every tool_use block in
+        // this payload — they may arrive standalone or embedded in an
+        // assistant content array.
+        let cappedThisIter = false;
+        for (const block of iterToolUseBlocks(payload)) {
+          const cmd = extractBashCommandFromBlock(block);
+          if (cmd === null) continue;
+          const key = `${block.name}:${cmd}`;
+          const next = (bashCallCounts.get(key) ?? 0) + 1;
+          bashCallCounts.set(key, next);
+          if (next >= repeatToolCallCap) {
+            loopedToolKey = cmd;
+            loopedToolCount = next;
+            killed = true;
+            cappedThisIter = true;
+            try {
+              proc.kill("SIGTERM");
+            } catch {
+              /* ignore */
+            }
+            break;
+          }
+        }
+        if (cappedThisIter) break;
+
         if (
           payloadType === "result" &&
           payloadObj?.["is_error"] === true &&
@@ -694,10 +891,19 @@ export class AgentRunner {
             break;
           }
         }
+
+        // If the wall-clock watchdog already fired, exit the loop promptly so
+        // we don't keep draining late-arriving events from the dying child.
+        if (stalledByWatchdog) break;
       }
     } catch (err) {
       // Stream iteration failure — treat as a failed session below.
       session.error = `Stream error: ${(err as Error).message}`;
+    } finally {
+      if (stallTimer) {
+        clearTimeout(stallTimer);
+        stallTimer = null;
+      }
     }
 
     let exitCode = 0;
@@ -716,6 +922,20 @@ export class AgentRunner {
     if (blockedReason) {
       session.status = "failed";
       session.error = `FLOW_BLOCKED: ${blockedReason}`;
+    } else if (loopedToolKey !== null) {
+      // E2: non-retryable. Scheduler treats `looped_on_blocked_tool:` as
+      // markPaused-immediately (see isLoopedOnBlockedTool).
+      session.status = "failed";
+      const truncated =
+        loopedToolKey.length > 80
+          ? `${loopedToolKey.slice(0, 80)}…`
+          : loopedToolKey;
+      session.error = `looped_on_blocked_tool: agent re-issued the same Bash command ${loopedToolCount} times: ${truncated}`;
+    } else if (stalledByWatchdog) {
+      // E1: wall-clock stall. Treated as a normal stage failure (consumes a
+      // retry slot) per the plan — Phase D would reclassify in the future.
+      session.status = "failed";
+      session.error = `Stall: no assistant progress for ${stallTimeoutMs}ms`;
     } else if (stale) {
       session.status = "failed";
       session.error = `Session stale: ${consecutiveRetries} consecutive api_retry events with no progress`;
@@ -755,6 +975,19 @@ export class AgentRunner {
       // Re-emit update with context percentage if it changed.
       if (typeof session.contextPercentage === "number") {
         this.eventBus.emit("session.updated", { session: { ...session } });
+      }
+    }
+
+    // E3: forensic process-tree probe. If the claude child left grandchildren
+    // alive (common when a GUI subprocess like Godot was spawned without the
+    // right headless flags), record them in the session meta so an audit can
+    // see what was leaked. Don't kill — just record.
+    if (typeof proc.pid === "number" && proc.pid > 0) {
+      try {
+        const surplus = await probeSurplusChildren(proc.pid);
+        if (surplus.length > 0) session.surplus_children = surplus;
+      } catch {
+        /* pgrep absent or errored — silently skip */
       }
     }
 

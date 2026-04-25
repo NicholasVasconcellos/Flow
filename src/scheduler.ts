@@ -9,6 +9,7 @@ import type {
   TaskStage,
 } from "./types.js";
 import type { AgentRunner } from "./agent.js";
+import { isLoopedOnBlockedTool } from "./agent.js";
 import type { StateStore } from "./state.js";
 import type { GitManager } from "./git.js";
 import type { EventBus } from "./events.js";
@@ -445,6 +446,12 @@ export class Scheduler {
       if (isBlockedError(err)) {
         return await this.markBlocked(taskId, stage, session.id, err);
       }
+      if (isLoopedOnBlockedTool(err)) {
+        // Non-retryable: the agent is stuck re-issuing the same Bash command.
+        // Pause directly so a human can investigate (e.g. a GUI subprocess
+        // hanging on a modal). Do not consume retries.
+        return await this.markPaused(taskId, stage, session.id, err);
+      }
       if (task.retries < this.config.retryCount) {
         task.retries += 1;
         task.lastError = { stage, message: err, at: nowIso() };
@@ -596,6 +603,8 @@ export class Scheduler {
       if (isBlockedError(err)) {
         return await this.markBlocked(taskId, parentStage, session.id, err);
       }
+      // looped_on_blocked_tool also pauses (non-retryable, mirrors the
+      // runAgentStage path). markPaused already handles other failures.
       return await this.markPaused(taskId, parentStage, session.id, err);
     }
 

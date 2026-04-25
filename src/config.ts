@@ -97,6 +97,8 @@ export type ConfigPatch = {
   maxConcurrent?: Config["maxConcurrent"];
   retryCount?: Config["retryCount"];
   maxConsecutiveApiRetries?: Config["maxConsecutiveApiRetries"];
+  stallTimeoutMs?: Config["stallTimeoutMs"];
+  repeatToolCallCap?: Config["repeatToolCallCap"];
   hasDocs?: Config["hasDocs"];
   defaults?: Partial<Config["defaults"]>;
   stages?: Partial<Config["stages"]>;
@@ -146,7 +148,13 @@ export function resolveStageConfig(config: Config, stage: StageKey): StageConfig
     stageOverride.model ?? baked.model ?? config.defaults.model;
   const effort =
     stageOverride.effort ?? baked.effort ?? config.defaults.effort ?? "med";
-  return { model, effort };
+  const stallTimeoutMs =
+    stageOverride.stallTimeoutMs ?? baked.stallTimeoutMs ?? config.stallTimeoutMs;
+  const repeatToolCallCap =
+    stageOverride.repeatToolCallCap ??
+    baked.repeatToolCallCap ??
+    config.repeatToolCallCap;
+  return { model, effort, stallTimeoutMs, repeatToolCallCap };
 }
 
 /**

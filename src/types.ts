@@ -46,6 +46,14 @@ export type StageKey = z.infer<typeof StageKeySchema>;
 export const StageConfigSchema = z.object({
   model: z.string(),
   effort: EffortSchema,
+  /** Wall-clock max time without an `assistant_text`/`tool_result` progress
+   *  event before the session is killed and marked failed. Catches GUI-modal
+   *  hangs the api_retry-counter watchdog can't see. */
+  stallTimeoutMs: z.number().int().positive().optional(),
+  /** If the agent issues the same `(tool, command)` Bash invocation this many
+   *  times in one session, kill it and surface a non-retryable
+   *  `looped_on_blocked_tool` error. */
+  repeatToolCallCap: z.number().int().positive().optional(),
 });
 export type StageConfig = z.infer<typeof StageConfigSchema>;
 
@@ -109,6 +117,12 @@ export const TokenCountsSchema = z.object({
 });
 export type TokenCounts = z.infer<typeof TokenCountsSchema>;
 
+export const SurplusChildSchema = z.object({
+  pid: z.number().int().nonnegative(),
+  name: z.string(),
+});
+export type SurplusChild = z.infer<typeof SurplusChildSchema>;
+
 export const SessionSchema = z.object({
   id: z.string(),
   taskId: z.string().nullable(),
@@ -135,6 +149,9 @@ export const SessionSchema = z.object({
   claudeSessionId: z.string().optional(),
   exitCode: z.number().int().optional(),
   error: z.string().optional(),
+  /** Forensic: child PIDs of the claude process still alive at session end,
+   *  per `pgrep -P`. Best-effort; absent on systems without `pgrep`. */
+  surplus_children: z.array(SurplusChildSchema).optional(),
 });
 export type Session = z.infer<typeof SessionSchema>;
 
@@ -187,6 +204,14 @@ export const ConfigSchema = z.object({
   maxConcurrent: z.union([z.number().int().positive(), z.literal("off")]).default(3),
   retryCount: z.number().int().nonnegative().default(0),
   maxConsecutiveApiRetries: z.number().int().positive().default(5),
+  /** Wall-clock max time (ms) without an `assistant_text`/`tool_result` event
+   *  before a session is killed and marked failed. Defaults to 3 minutes.
+   *  Per-stage `stallTimeoutMs` overrides this value when set. */
+  stallTimeoutMs: z.number().int().positive().default(180_000),
+  /** If the agent re-issues the same `(tool, command)` Bash invocation this
+   *  many times in one session, the session is killed with a non-retryable
+   *  `looped_on_blocked_tool:` error. Defaults to 3. */
+  repeatToolCallCap: z.number().int().positive().default(3),
   hasDocs: z.boolean().default(true),
   defaults: z.object({
     model: z.string().default("sonnet"),
