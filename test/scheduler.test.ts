@@ -72,6 +72,8 @@ interface FakeAgentHandle {
   inFlight: Set<string>;
   maxInFlight: number;
   setScript(script: AgentScript): void;
+  setWriteDefaultSignal(write: boolean): void;
+  setHeadBumpFn(fn: ((taskId: string) => void) | null): void;
 }
 
 function makeFakeAgent(
@@ -82,6 +84,8 @@ function makeFakeAgent(
   const inFlight = new Set<string>();
   let maxInFlight = 0;
   let script: AgentScript = initialScript ?? (() => ({}));
+  let writeDefaultSignal = true;
+  let headBumpFn: ((taskId: string) => void) | null = null;
 
   const ctx: FakeAgentContext = {
     callsForTask: (taskId) => calls.filter((c) => c.taskId === taskId),
@@ -107,28 +111,31 @@ function makeFakeAgent(
         await Promise.resolve();
         const override = await script(call, ctx);
 
-        // Default behavior: write a stage signal file claiming success so the
-        // scheduler advances. Skip if the script flagged failure or already
-        // wrote its own signal.
+        // Default behavior: write a stage signal file claiming success and
+        // simulate a HEAD-moving commit so the scheduler advances. Skip if
+        // the script flagged failure or already wrote its own signal.
         const willFail =
           override.status === "failed" || override.status === "autocompacted";
         if (!willFail && args.taskId) {
-          const file = paths.taskStageSignal(args.taskId);
-          let exists = false;
-          try {
-            await fs.access(file);
-            exists = true;
-          } catch {
-            /* missing — will write default */
+          if (writeDefaultSignal) {
+            const file = paths.taskStageSignal(args.taskId);
+            let exists = false;
+            try {
+              await fs.access(file);
+              exists = true;
+            } catch {
+              /* missing — will write default */
+            }
+            if (!exists) {
+              await fs.mkdir(path.dirname(file), { recursive: true });
+              await fs.writeFile(
+                file,
+                JSON.stringify({ stage: args.stage, status: "done" }),
+                "utf8",
+              );
+            }
           }
-          if (!exists) {
-            await fs.mkdir(path.dirname(file), { recursive: true });
-            await fs.writeFile(
-              file,
-              JSON.stringify({ stage: args.stage, status: "done" }),
-              "utf8",
-            );
-          }
+          headBumpFn?.(args.taskId);
         }
 
         const now = new Date().toISOString();
@@ -171,6 +178,12 @@ function makeFakeAgent(
     setScript(next: AgentScript) {
       script = next;
     },
+    setWriteDefaultSignal(write: boolean) {
+      writeDefaultSignal = write;
+    },
+    setHeadBumpFn(fn: ((taskId: string) => void) | null) {
+      headBumpFn = fn;
+    },
   } as FakeAgentHandle;
 }
 
@@ -197,6 +210,8 @@ interface FakeGitHandle {
   removed: string[];
   completeMergeCalls: number;
   mergeCalls: Record<string, number>;
+  bumpHead(taskId: string): string;
+  getHead(taskId: string): string | null;
 }
 
 function makeFakeGit(
@@ -212,7 +227,16 @@ function makeFakeGit(
   const merges: string[] = [];
   const removed: string[] = [];
   const mergeCalls: Record<string, number> = {};
+  const heads = new Map<string, string>();
+  let headCounter = 0;
   let completeMergeCalls = 0;
+
+  const bumpHead = (taskId: string): string => {
+    headCounter += 1;
+    const sha = `sha-${taskId}-${headCounter}`;
+    heads.set(taskId, sha);
+    return sha;
+  };
 
   const git: Partial<GitManager> = {
     async createWorktree(taskId: string) {
@@ -238,6 +262,10 @@ function makeFakeGit(
 
     async hasUncommittedChanges(_taskId: string) {
       return opts.hasUncommittedChanges === true;
+    },
+
+    async getWorktreeHeadSha(taskId: string) {
+      return heads.get(taskId) ?? null;
     },
 
     async commitAllInWorktree(taskId: string, message: CommitMessage) {
@@ -283,6 +311,8 @@ function makeFakeGit(
       return completeMergeCalls;
     },
     mergeCalls,
+    bumpHead,
+    getHead: (taskId: string) => heads.get(taskId) ?? null,
   };
   return handle;
 }
@@ -335,6 +365,10 @@ async function makeHarness(
 
   const agent = makeFakeAgent(paths, opts.agentScript);
   const git = makeFakeGit(root, paths, opts.gitOpts);
+  // Wire HEAD-bump default: a "successful" agent run means the agent
+  // committed, so the fake git's HEAD advances. Tests that want to simulate
+  // "agent claimed done but didn't commit" can override via setHeadBumpFn(null).
+  agent.setHeadBumpFn((taskId) => git.bumpHead(taskId));
   const scheduler = new Scheduler({
     paths,
     config,
@@ -662,7 +696,7 @@ test(
 // ---------------------------------------------------------------------------
 
 test(
-  "commit_recovery runs when a stage finishes with uncommitted changes",
+  "commit_recovery runs in the legacy fallback (no signal) when stage finishes dirty",
   { timeout: 10000 },
   async () => {
     const h = await makeHarness({
@@ -670,10 +704,11 @@ test(
       gitOpts: { hasUncommittedChanges: true },
     });
 
-    // The fake git always reports dirty, so every stage triggers a commit_recovery
-    // session. We just check that at least one was spawned and the task still
-    // progresses (since hasUncommittedChanges is static, it never goes clean
-    // and the scheduler eventually pauses).
+    // Disable the default stage-signal write so the scheduler enters the
+    // legacy fallback path: succeeded session + HEAD moved + no signal →
+    // dirty-check + commit_recovery + advance.
+    h.agent.setWriteDefaultSignal(false);
+
     await h.scheduler.runTask("A");
     const recoveries = h.agent.calls.filter(
       (c) => c.stage === "commit_recovery",
@@ -827,5 +862,165 @@ test(
     const idxB = order.indexOf("start:B");
     assert.ok(idxA >= 0 && idxB >= 0);
     assert.ok(idxA < idxB);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Issue 1: Symmetric signal+HEAD advance rule
+// ---------------------------------------------------------------------------
+
+test(
+  "stage rescued when failed session left a 'done' signal AND HEAD moved",
+  { timeout: 10000 },
+  async () => {
+    let specCalls = 0;
+    const h = await makeHarness({
+      taskDefs: [mkTaskDef("A")],
+      config: { retryCount: 0 },
+      agentScript: async (call) => {
+        if (call.stage === "spec" && call.taskId) {
+          specCalls += 1;
+          // Simulate the bug: agent wrote signal + committed, then the wrapper
+          // process stalled on a trailing tool call and got SIGTERMed.
+          const file = h.paths.taskStageSignal(call.taskId);
+          await fs.mkdir(path.dirname(file), { recursive: true });
+          await fs.writeFile(
+            file,
+            JSON.stringify({ stage: "spec", status: "done" }),
+            "utf8",
+          );
+          // Simulate the commit by bumping HEAD.
+          h.git.bumpHead(call.taskId);
+          return {
+            status: "failed",
+            error: "Stall: no assistant progress for 180000ms",
+            exitCode: 1,
+          };
+        }
+        return {};
+      },
+    });
+
+    const t = await h.scheduler.runTask("A");
+    assert.equal(t.status, "merged");
+    assert.equal(specCalls, 1);
+    // No retry was needed because the rescue rule treated spec as done.
+    assert.equal(t.retries, 0);
+  },
+);
+
+test(
+  "stage NOT rescued when 'done' signal but HEAD did not move",
+  { timeout: 10000 },
+  async () => {
+    const h = await makeHarness({
+      taskDefs: [mkTaskDef("A")],
+      config: { retryCount: 0 },
+      agentScript: async (call) => {
+        if (call.stage === "spec" && call.taskId) {
+          // Skill bug: wrote the signal but never committed.
+          const file = h.paths.taskStageSignal(call.taskId);
+          await fs.mkdir(path.dirname(file), { recursive: true });
+          await fs.writeFile(
+            file,
+            JSON.stringify({ stage: "spec", status: "done" }),
+            "utf8",
+          );
+          // No bumpHead — HEAD stays where it was.
+          return {
+            status: "failed",
+            error: "Stall: no assistant progress for 180000ms",
+            exitCode: 1,
+          };
+        }
+        return {};
+      },
+    });
+    // Disable the default head bump so the agent's failure run leaves HEAD untouched.
+    h.agent.setHeadBumpFn(null);
+
+    const t = await h.scheduler.runTask("A");
+    assert.equal(t.status, "paused");
+    assert.equal(t.stage, "spec");
+  },
+);
+
+test(
+  "happy path still advances on success when signal + HEAD both present",
+  { timeout: 10000 },
+  async () => {
+    // Default fake agent writes the signal AND the harness wires bumpHead on
+    // every successful spawn — this is the regression check that the new
+    // symmetric rule doesn't break the existing happy path.
+    const h = await makeHarness({ taskDefs: [mkTaskDef("A")] });
+    const t = await h.scheduler.runTask("A");
+    assert.equal(t.status, "merged");
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Issue 2: Transient API errors don't consume the retry budget
+// ---------------------------------------------------------------------------
+
+test(
+  "transient API errors increment transientRetries, not retries",
+  { timeout: 10000 },
+  async () => {
+    let specCalls = 0;
+    const h = await makeHarness({
+      taskDefs: [mkTaskDef("A")],
+      config: { retryCount: 0 },
+      agentScript: (call) => {
+        if (call.stage === "spec") {
+          specCalls += 1;
+          if (specCalls === 1) {
+            return {
+              status: "failed",
+              error: "Stream error: idle timeout",
+              exitCode: 1,
+              transientError: true,
+            };
+          }
+        }
+        return {};
+      },
+    });
+
+    const t = await h.scheduler.runTask("A");
+    assert.equal(t.status, "merged");
+    // retryCount=0 — a non-transient failure would have paused. The transient
+    // retry succeeded without consuming retries.
+    assert.equal(t.retries, 0);
+    assert.equal(specCalls, 2);
+  },
+);
+
+test(
+  "transientRetries resets to 0 after a successful stage advance",
+  { timeout: 10000 },
+  async () => {
+    let specCalls = 0;
+    const h = await makeHarness({
+      taskDefs: [mkTaskDef("A")],
+      config: { retryCount: 0 },
+      agentScript: (call) => {
+        if (call.stage === "spec") {
+          specCalls += 1;
+          if (specCalls === 1) {
+            return {
+              status: "failed",
+              error: "Stream error: idle timeout",
+              exitCode: 1,
+              transientError: true,
+            };
+          }
+        }
+        return {};
+      },
+    });
+
+    const t = await h.scheduler.runTask("A");
+    assert.equal(t.status, "merged");
+    assert.equal(t.transientRetries, 0);
   },
 );

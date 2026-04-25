@@ -200,6 +200,7 @@ test("upsertTask / removeTask basic semantics", async () => {
     status: "pending",
     stage: "spec",
     retries: 0,
+    transientRetries: 0,
     sessionIds: [],
     createdAt: now,
     updatedAt: now,

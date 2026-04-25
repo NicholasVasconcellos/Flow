@@ -679,6 +679,18 @@ export class AgentRunner {
 
     this.eventBus.emit("session.started", { session: { ...session } });
 
+    // Persist a partial `.meta.json` so a mid-session crash leaves enough
+    // forensic state (id, taskId, stage, startedAt) to reconstruct what the
+    // session was attempting. Awaited so it can't race with the final write.
+    try {
+      await writeJsonAtomic(
+        this.paths.sessionMeta(args.taskId, sessionId),
+        session,
+      );
+    } catch {
+      /* ignore meta write errors */
+    }
+
     const argv = buildClaudeArgv({
       prompt,
       model,
@@ -899,6 +911,7 @@ export class AgentRunner {
     } catch (err) {
       // Stream iteration failure — treat as a failed session below.
       session.error = `Stream error: ${(err as Error).message}`;
+      session.transientError = true;
     } finally {
       if (stallTimer) {
         clearTimeout(stallTimer);
@@ -939,6 +952,7 @@ export class AgentRunner {
     } else if (stale) {
       session.status = "failed";
       session.error = `Session stale: ${consecutiveRetries} consecutive api_retry events with no progress`;
+      session.transientError = true;
     } else if (exitCode !== 0) {
       session.status = "failed";
       if (!session.error) {
@@ -991,6 +1005,11 @@ export class AgentRunner {
       }
     }
 
+    if (session.id !== sessionId) {
+      throw new Error(
+        `session id drift: expected "${sessionId}", got "${String(session.id)}"`,
+      );
+    }
     try {
       await writeJsonAtomic(
         this.paths.sessionMeta(args.taskId, sessionId),

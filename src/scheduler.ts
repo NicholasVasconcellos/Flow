@@ -74,6 +74,10 @@ interface TaskHandle {
   cancelled: boolean;
 }
 
+/** How many consecutive transient API errors a task may absorb on a single
+ *  stage before they start consuming the agent-logic retry budget. */
+const TRANSIENT_RETRY_CAP = 3;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -265,6 +269,7 @@ export class Scheduler {
       if (!match) continue;
       task.status = "ready";
       task.retries = 0;
+      task.transientRetries = 0;
       task.lastError = undefined;
       task.updatedAt = nowIso();
       this.state.upsertTask(task);
@@ -281,6 +286,7 @@ export class Scheduler {
     if (task.status !== "paused" && task.status !== "blocked") return;
     task.status = "running";
     task.retries = 0;
+    task.transientRetries = 0;
     task.lastError = undefined;
     task.updatedAt = nowIso();
     this.state.upsertTask(task);
@@ -416,6 +422,11 @@ export class Scheduler {
     // Clear any leftover stage signal from a previous attempt before spawning.
     await clearStageSignal(this.paths, taskId);
 
+    // Snapshot HEAD before the agent runs so we can detect whether it
+    // produced a real commit on the worktree branch (the canonical "stage
+    // did work" signal alongside stage.json).
+    const preHead = await this.git.getWorktreeHeadSha(taskId);
+
     const summary = await readIfExists(this.paths.taskSummary(taskId));
     const extraPrompt = [summary ?? "", errorAddendum]
       .filter((s) => s && s.trim())
@@ -441,6 +452,13 @@ export class Scheduler {
     task.updatedAt = nowIso();
     this.state.upsertTask(task);
 
+    const postHead = await this.git.getWorktreeHeadSha(taskId);
+    const headMoved = preHead !== postHead && postHead !== null;
+
+    const signal = await readStageSignal(this.paths, taskId);
+
+    // Non-retryable filters first — these short-circuit regardless of signal
+    // or HEAD state.
     if (session.status === "failed") {
       const err = session.error ?? `Stage ${stage} failed`;
       if (isBlockedError(err)) {
@@ -452,8 +470,48 @@ export class Scheduler {
         // hanging on a modal). Do not consume retries.
         return await this.markPaused(taskId, stage, session.id, err);
       }
-      if (task.retries < this.config.retryCount) {
-        task.retries += 1;
+    }
+
+    // Agent-reported blocked via stage.json — respected on either path.
+    if (signal && signal.status === "blocked") {
+      const reason = signal.reason || `Stage ${stage} reported blocked`;
+      return await this.markBlocked(
+        taskId,
+        stage,
+        session.id,
+        `FLOW_BLOCKED: ${reason}`,
+      );
+    }
+
+    // Symmetric advance rule: signal "done" + matching stage + HEAD moved
+    // means the agent finished. Applies on both success and failure paths so a
+    // trailing-tool stall after a clean commit + signal write doesn't sink the
+    // stage.
+    if (
+      signal &&
+      signal.status === "done" &&
+      signal.stage === stage &&
+      headMoved
+    ) {
+      return await this.finalizeStageSuccess(taskId);
+    }
+
+    // Stage drift — agent wrote a signal claiming a different stage. Retry
+    // with a budget so the user notices.
+    if (signal && signal.status === "done" && signal.stage !== stage) {
+      const msg = `Stage signal mismatch: agent wrote stage="${signal.stage}" but expected "${stage}"`;
+      return await this.bumpRetryOrPause(taskId, stage, session.id, msg);
+    }
+
+    // Failed session that wasn't rescued: transient retry first (no budget
+    // consumption), then the regular retry/pause budget.
+    if (session.status === "failed") {
+      const err = session.error ?? `Stage ${stage} failed`;
+      if (
+        session.transientError &&
+        (task.transientRetries ?? 0) < TRANSIENT_RETRY_CAP
+      ) {
+        task.transientRetries = (task.transientRetries ?? 0) + 1;
         task.lastError = { stage, message: err, at: nowIso() };
         task.updatedAt = nowIso();
         this.state.upsertTask(task);
@@ -461,69 +519,78 @@ export class Scheduler {
         this.eventBus.emit("task.upsert", { task: { ...task } });
         return {
           kind: "retry",
-          addendum: `# Previous attempt error\nStage ${stage} failed:\n${err}\n\nPlease fix and retry.`,
+          addendum: `# Previous attempt error\nStage ${stage} failed transiently:\n${err}\n\nPlease resume and continue.`,
         };
       }
-      return await this.markPaused(taskId, stage, session.id, err);
+      return await this.bumpRetryOrPause(taskId, stage, session.id, err);
     }
 
-    // Stage signal trumps regex parsing if present. Falls back to legacy
-    // success-implies-advance behavior when the file is absent so unmigrated
-    // skills keep working.
-    const signal = await readStageSignal(this.paths, taskId);
-    if (signal) {
-      if (signal.status === "blocked") {
-        const reason = signal.reason || `Stage ${stage} reported blocked`;
-        return await this.markBlocked(
-          taskId,
-          stage,
-          session.id,
-          `FLOW_BLOCKED: ${reason}`,
-        );
-      }
-      if (signal.stage !== stage) {
-        // Drift — agent claimed a different stage. Treat as a failed stage so
-        // the user notices, retrying if budget allows.
-        const msg = `Stage signal mismatch: agent wrote stage="${signal.stage}" but expected "${stage}"`;
-        if (task.retries < this.config.retryCount) {
-          task.retries += 1;
-          task.lastError = { stage, message: msg, at: nowIso() };
-          task.updatedAt = nowIso();
-          this.state.upsertTask(task);
-          await this.saveState();
-          this.eventBus.emit("task.upsert", { task: { ...task } });
-          return {
-            kind: "retry",
-            addendum: `# Previous attempt error\n${msg}\n\nPlease fix and retry.`,
-          };
+    // Success-but-no-rescue cases:
+    // - signal absent + HEAD moved → legacy fallback (commit_recovery + advance).
+    // - signal "done" + HEAD didn't move → skill bug (claimed done but no commit); retry.
+    // - signal absent + HEAD didn't move → agent did nothing; retry.
+    if (!signal && headMoved) {
+      try {
+        const dirty = await this.git.hasUncommittedChanges(taskId);
+        if (dirty) {
+          const recovered = await this.runCommitRecovery(taskId, stage);
+          if (recovered.kind === "paused") return { kind: "paused" };
+          if (recovered.kind === "blocked") return { kind: "blocked" };
         }
-        return await this.markPaused(taskId, stage, session.id, msg);
+      } catch {
+        /* defensive — recovery is best-effort */
       }
+      return await this.finalizeStageSuccess(taskId);
     }
 
-    // Stage agent succeeded. Run commit_recovery if it left uncommitted work
-    // — the per-stage commit instruction in the prompt should normally make
-    // this a no-op.
-    try {
-      const dirty = await this.git.hasUncommittedChanges(taskId);
-      if (dirty) {
-        const recovered = await this.runCommitRecovery(taskId, stage);
-        if (recovered.kind === "paused") return { kind: "paused" };
-        if (recovered.kind === "blocked") return { kind: "blocked" };
-      }
-    } catch {
-      /* defensive — recovery is best-effort */
-    }
+    const noProgressMsg = signal
+      ? `Stage signal "done" but no commit was made on the worktree branch.`
+      : `Stage finished without a stage signal and without committing.`;
+    return await this.bumpRetryOrPause(taskId, stage, session.id, noProgressMsg);
+  }
 
+  /** Per-stage cleanup when the stage completes — clears the signal, resets
+   *  retry counters, and emits the upsert. Extracted so both the symmetric
+   *  signal+HEAD rescue path and the legacy fallback path use identical
+   *  finalize semantics. */
+  private async finalizeStageSuccess(
+    taskId: string,
+  ): Promise<{ kind: "ok" }> {
     await clearStageSignal(this.paths, taskId);
-
-    task = this.requireTask(taskId);
+    const task = this.requireTask(taskId);
     task.lastError = undefined;
+    task.transientRetries = 0;
     task.updatedAt = nowIso();
     this.state.upsertTask(task);
     await this.saveState();
     this.eventBus.emit("task.upsert", { task: { ...task } });
     return { kind: "ok" };
+  }
+
+  /** Common path for "stage didn't progress this attempt": consume one retry
+   *  slot if the budget allows, otherwise pause. */
+  private async bumpRetryOrPause(
+    taskId: string,
+    stage: AgentStage,
+    sessionId: string,
+    err: string,
+  ): Promise<
+    { kind: "retry"; addendum: string } | { kind: "paused" }
+  > {
+    const task = this.requireTask(taskId);
+    if (task.retries < this.config.retryCount) {
+      task.retries += 1;
+      task.lastError = { stage, message: err, at: nowIso() };
+      task.updatedAt = nowIso();
+      this.state.upsertTask(task);
+      await this.saveState();
+      this.eventBus.emit("task.upsert", { task: { ...task } });
+      return {
+        kind: "retry",
+        addendum: `# Previous attempt error\nStage ${stage} failed:\n${err}\n\nPlease fix and retry.`,
+      };
+    }
+    return await this.markPaused(taskId, stage, sessionId, err);
   }
 
   private async markBlocked(

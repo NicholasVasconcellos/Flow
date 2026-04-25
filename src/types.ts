@@ -82,6 +82,10 @@ export const TaskRuntimeSchema = TaskDefSchema.extend({
   status: TaskStatusSchema,
   stage: TaskStageSchema,
   retries: z.number().int().nonnegative(),
+  /** Per-task counter of transient-API retries. Tracked separately from
+   *  `retries` so a flaky API stream doesn't burn the agent-logic retry
+   *  budget. Resets when a stage advances. */
+  transientRetries: z.number().int().nonnegative().default(0),
   worktreePath: z.string().optional(),
   branchName: z.string().optional(),
   currentSessionId: z.string().optional(),
@@ -149,6 +153,11 @@ export const SessionSchema = z.object({
   claudeSessionId: z.string().optional(),
   exitCode: z.number().int().optional(),
   error: z.string().optional(),
+  /** Set by the agent runner when a session failure was caused by a
+   *  transient API/stream condition (stream errors, session-stale). The
+   *  scheduler uses this to retry without consuming the agent-logic retry
+   *  budget. */
+  transientError: z.boolean().optional(),
   /** Forensic: child PIDs of the claude process still alive at session end,
    *  per `pgrep -P`. Best-effort; absent on systems without `pgrep`. */
   surplus_children: z.array(SurplusChildSchema).optional(),

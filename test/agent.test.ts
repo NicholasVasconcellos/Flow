@@ -454,3 +454,110 @@ test("spawnAgent throws clear error when skill missing", async () => {
     (err: Error) => /missingSkill/.test(err.message),
   );
 });
+
+// ---------------------------------------------------------------------------
+// Issue 4: partial .meta.json visible while session runs
+// ---------------------------------------------------------------------------
+
+test("partial .meta.json contains id, taskId, stage, startedAt before session ends", async () => {
+  // This exercises the partial-write code path by intercepting the spawner
+  // and reading the meta file from inside the spawner factory — a moment
+  // strictly between the partial write (just before spawn) and the final
+  // write (just before session.ended).
+  const root = await mkTmp();
+  const paths = new Paths(root);
+  await writeSkill(paths, "exec", "skill");
+
+  const taskId = "T-partial-2";
+  let snapshot: string | null = null;
+
+  const spawner: ProcessSpawner = ({ bin: _b, args: _a, cwd: _c }) => {
+    // At this point, the partial meta should already be on disk.
+    // We can't await here (sync factory), so kick off a read in the
+    // background and await it shortly after.
+    // Use a sync path resolver: the meta dir is the per-task sessions dir.
+    // Find any file under it and read it.
+    return {
+      stdout: (async function* () {
+        // Read all meta files under task sessions dir.
+        try {
+          const dir = paths.taskSessionsDir(taskId);
+          const entries = await fs.readdir(dir);
+          const meta = entries.find((f) => f.endsWith(".meta.json"));
+          if (meta) {
+            snapshot = await fs.readFile(path.join(dir, meta), "utf8");
+          }
+        } catch {
+          /* ignore */
+        }
+        yield JSON.stringify({ type: "system", subtype: "init" });
+      })(),
+      stderr: (async function* () {
+        /* none */
+      })(),
+      exit: Promise.resolve(0),
+      kill() {
+        /* no-op */
+      },
+    };
+  };
+
+  const bus = new EventBus();
+  const runner = new AgentRunner({
+    paths,
+    config: defaultConfig(),
+    eventBus: bus,
+    spawner,
+    now: () => new Date(),
+  });
+
+  const session = await runner.spawnAgent({
+    taskId,
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  assert.ok(snapshot, "partial meta should be on disk during the session");
+  const partial = JSON.parse(snapshot!);
+  assert.equal(partial.id, session.id);
+  assert.equal(partial.taskId, taskId);
+  assert.equal(partial.stage, "exec");
+  assert.equal(typeof partial.startedAt, "string");
+  assert.ok(partial.startedAt.length > 0);
+  // The partial write happens before exit, so status is still "running".
+  assert.equal(partial.status, "running");
+});
+
+// ---------------------------------------------------------------------------
+// Issue 5: project-level (taskId: null) meta has populated id
+// ---------------------------------------------------------------------------
+
+test("project-level session meta has non-null id matching the session ULID", async () => {
+  const root = await mkTmp();
+  const spawnerHandle = makeFakeSpawner();
+  const { runner, paths } = makeRunner(root, spawnerHandle);
+  await writeSkill(paths, "setup", "skill");
+
+  spawnerHandle.queue.push({
+    stdout: [JSON.stringify({ type: "system", subtype: "init" })],
+    exitCode: 0,
+  });
+  // Context probe (only fires for non-failed sessions; this one will succeed).
+  spawnerHandle.queue.push({ stdout: [], exitCode: 0 });
+
+  const session = await runner.spawnAgent({
+    taskId: null,
+    stage: "setup",
+    skillName: "setup",
+    worktreePath: root,
+  });
+
+  assert.equal(session.taskId, null);
+  assert.ok(session.id);
+
+  const metaPath = paths.sessionMeta(null, session.id);
+  const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
+  assert.equal(meta.id, session.id);
+  assert.notEqual(meta.id, null);
+});

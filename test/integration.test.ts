@@ -158,51 +158,48 @@ function makeFakeAgent(
         await entry.sideEffect(args);
       }
 
-      // Mimic the new "agent commits its own work" rule: if the worktree has
-      // uncommitted changes after the stage, stage and commit them. Project-
-      // level stages (setup/getTasks) skip this since they don't run inside a
-      // task worktree.
-      if (args.taskId) {
+      // Mimic the new "agent commits its own work" rule: stage and commit
+      // any uncommitted changes after the stage, and ALWAYS make at least an
+      // empty commit so the scheduler's signal+HEAD-moved advance rule sees
+      // progress. Project-level stages (setup/getTasks) skip this since they
+      // don't run inside a task worktree.
+      const willFail =
+        (entry?.override?.status as string | undefined) === "failed" ||
+        (entry?.override?.status as string | undefined) === "autocompacted";
+
+      if (args.taskId && !willFail) {
         try {
           const wt = simpleGit(args.worktreePath);
-          const status = await wt.status();
-          if (!status.isClean()) {
-            await wt.raw([
-              "-c",
-              "user.email=flow@localhost",
-              "-c",
-              "user.name=Flow",
-              "add",
-              "-A",
-            ]);
-            await wt.raw([
-              "-c",
-              "user.email=flow@localhost",
-              "-c",
-              "user.name=Flow",
-              "commit",
-              "-m",
-              `${args.stage}: fake stage commit`,
-              "--allow-empty",
-            ]);
-          }
+          await wt.raw([
+            "-c",
+            "user.email=flow@localhost",
+            "-c",
+            "user.name=Flow",
+            "add",
+            "-A",
+          ]);
+          await wt.raw([
+            "-c",
+            "user.email=flow@localhost",
+            "-c",
+            "user.name=Flow",
+            "commit",
+            "-m",
+            `${args.stage}: fake stage commit`,
+            "--allow-empty",
+          ]);
         } catch {
           /* best-effort */
         }
 
         // Write the stage signal so the scheduler advances deterministically.
-        const willFail =
-          (entry?.override?.status as string | undefined) === "failed" ||
-          (entry?.override?.status as string | undefined) === "autocompacted";
-        if (!willFail) {
-          const file = paths.taskStageSignal(args.taskId);
-          await fs.mkdir(path.dirname(file), { recursive: true });
-          await fs.writeFile(
-            file,
-            JSON.stringify({ stage: args.stage, status: "done" }),
-            "utf8",
-          );
-        }
+        const file = paths.taskStageSignal(args.taskId);
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(
+          file,
+          JSON.stringify({ stage: args.stage, status: "done" }),
+          "utf8",
+        );
       }
 
       const sessionId = args.sessionId ?? newId();
@@ -307,27 +304,26 @@ async function finalizeStage(
   if (!failed) {
     try {
       const wt = simpleGit(args.worktreePath);
-      const status = await wt.status();
-      if (!status.isClean()) {
-        await wt.raw([
-          "-c",
-          "user.email=flow@localhost",
-          "-c",
-          "user.name=Flow",
-          "add",
-          "-A",
-        ]);
-        await wt.raw([
-          "-c",
-          "user.email=flow@localhost",
-          "-c",
-          "user.name=Flow",
-          "commit",
-          "-m",
-          `${args.stage}: fake stage commit`,
-          "--allow-empty",
-        ]);
-      }
+      // Always commit (--allow-empty) so the scheduler's signal+HEAD-moved
+      // rule observes progress, even when the stage skill produced no diff.
+      await wt.raw([
+        "-c",
+        "user.email=flow@localhost",
+        "-c",
+        "user.name=Flow",
+        "add",
+        "-A",
+      ]);
+      await wt.raw([
+        "-c",
+        "user.email=flow@localhost",
+        "-c",
+        "user.name=Flow",
+        "commit",
+        "-m",
+        `${args.stage}: fake stage commit`,
+        "--allow-empty",
+      ]);
     } catch {
       /* ignore */
     }

@@ -114,6 +114,7 @@ export class StateStore {
           status: "pending",
           stage: "spec",
           retries: 0,
+          transientRetries: 0,
           sessionIds: [],
           createdAt: now,
           updatedAt: now,

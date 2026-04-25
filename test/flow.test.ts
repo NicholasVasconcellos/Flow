@@ -24,10 +24,26 @@ async function mkTmp(): Promise<string> {
 // Fake AgentRunner — mirrors scheduler.test.ts
 // ---------------------------------------------------------------------------
 
-function makeFakeAgent(): AgentRunner {
+function makeFakeAgent(
+  paths: Paths,
+  bumpHead: (taskId: string) => void,
+): AgentRunner {
   const runner: Partial<AgentRunner> = {
     async spawnAgent(args: SpawnArgs): Promise<Session> {
       const now = new Date().toISOString();
+      // Simulate a "successful" agent run: write the stage signal and
+      // advance HEAD on the worktree branch. The scheduler's symmetric
+      // signal+HEAD rule depends on both being present.
+      if (args.taskId) {
+        const file = paths.taskStageSignal(args.taskId);
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(
+          file,
+          JSON.stringify({ stage: args.stage, status: "done" }),
+          "utf8",
+        );
+        bumpHead(args.taskId);
+      }
       const s: Session = {
         id: newId(),
         taskId: args.taskId,
@@ -54,7 +70,18 @@ function makeFakeAgent(): AgentRunner {
 // Fake GitManager
 // ---------------------------------------------------------------------------
 
-function makeFakeGit(root: string): GitManager {
+interface FakeGitHandle {
+  git: GitManager;
+  bumpHead(taskId: string): void;
+}
+
+function makeFakeGit(root: string): FakeGitHandle {
+  const heads = new Map<string, string>();
+  let counter = 0;
+  const bumpHead = (taskId: string): void => {
+    counter += 1;
+    heads.set(taskId, `sha-${taskId}-${counter}`);
+  };
   const fake: Partial<GitManager> = {
     async ensureRepo() {
       return true;
@@ -67,6 +94,9 @@ function makeFakeGit(root: string): GitManager {
     },
     async removeWorktree() {
       /* no-op */
+    },
+    async getWorktreeHeadSha(taskId: string) {
+      return heads.get(taskId) ?? null;
     },
     async commitAllInWorktree(_taskId: string, _message: CommitMessage) {
       return "deadbeef";
@@ -81,7 +111,7 @@ function makeFakeGit(root: string): GitManager {
       /* no-op */
     },
   };
-  return fake as GitManager;
+  return { git: fake as GitManager, bumpHead };
 }
 
 // ---------------------------------------------------------------------------
@@ -107,10 +137,13 @@ test(
     };
     await fs.writeFile(paths.tasksJson, JSON.stringify(tasksFile), "utf8");
 
-    const agent = makeFakeAgent();
-    const git = makeFakeGit(root);
+    const gitHandle = makeFakeGit(root);
+    const agent = makeFakeAgent(paths, gitHandle.bumpHead);
 
-    const flow = await createFlow({ projectPath: root }, { agent, git });
+    const flow = await createFlow(
+      { projectPath: root },
+      { agent, git: gitHandle.git },
+    );
 
     // A should be ready after creation; B pending.
     const tasks0 = flow.getTasks();
@@ -220,9 +253,12 @@ test("replaySession streams a session's JSONL back", { timeout: 10000 }, async (
   };
   await fs.writeFile(paths.stateJson, JSON.stringify(state, null, 2), "utf8");
 
-  const agent = makeFakeAgent();
-  const git = makeFakeGit(root);
-  const flow = await createFlow({ projectPath: root }, { agent, git });
+  const gitHandle = makeFakeGit(root);
+  const agent = makeFakeAgent(paths, gitHandle.bumpHead);
+  const flow = await createFlow(
+    { projectPath: root },
+    { agent, git: gitHandle.git },
+  );
 
   const iterable = await flow.replaySession(sessionId);
   const events: SessionEvent[] = [];
@@ -281,9 +317,12 @@ test("getNextTask + getReadyTasks pick oldest ready task", { timeout: 10000 }, a
   };
   await fs.writeFile(paths.tasksJson, JSON.stringify(tasksFile), "utf8");
 
-  const agent = makeFakeAgent();
-  const git = makeFakeGit(root);
-  const flow = await createFlow({ projectPath: root }, { agent, git });
+  const gitHandle = makeFakeGit(root);
+  const agent = makeFakeAgent(paths, gitHandle.bumpHead);
+  const flow = await createFlow(
+    { projectPath: root },
+    { agent, git: gitHandle.git },
+  );
 
   const ready = flow.getReadyTasks();
   assert.equal(ready.length, 2);

@@ -27,6 +27,8 @@ function makeConfig(): Config {
     maxConcurrent: 3,
     retryCount: 0,
     maxConsecutiveApiRetries: 5,
+    stallTimeoutMs: 180_000,
+    repeatToolCallCap: 3,
     hasDocs: true,
     defaults: { model: "claude-sonnet-4-5", effort: "med" },
     stages: {},
@@ -347,6 +349,7 @@ test("bus task.upsert is broadcast to connected clients", async () => {
         status: "ready",
         stage: "spec",
         retries: 0,
+        transientRetries: 0,
         sessionIds: [],
         createdAt: now,
         updatedAt: now,
@@ -479,6 +482,46 @@ test("notification.ack forwards to flow.ackNotification", async () => {
   } finally {
     await server.close();
   }
+});
+
+test("task.retry is fire-and-forget — server doesn't block on retryTask", async () => {
+  const { flow, ctx } = makeFakeFlow();
+  // Replace retryTask with one that hangs forever; the WS handler must NOT
+  // await it, so the connection should remain responsive.
+  let started = false;
+  flow.retryTask = async (_id: string) => {
+    started = true;
+    await new Promise(() => {
+      /* never resolves */
+    });
+  };
+
+  const server = await startWsServer({ flow, port: 0, version: "0.1.0" });
+  try {
+    const c = await connect(server.port);
+    try {
+      await c.waitFor((m) => m.type === "config");
+      c.send({ type: "task.retry", taskId: "T-hang" });
+
+      // Wait briefly for the handler to invoke retryTask, then verify the
+      // server is still responsive by issuing a config.get and getting a
+      // reply within timeout.
+      const deadline = Date.now() + 500;
+      while (!started && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      assert.equal(started, true);
+
+      c.send({ type: "config.get", requestId: "rq1" });
+      const reply = await c.waitFor((m) => m.type === "config", 1000);
+      assert.equal(reply.type, "config");
+    } finally {
+      await c.close();
+    }
+  } finally {
+    await server.close();
+  }
+  void ctx;
 });
 
 test("task.retry and task.resume both forward to retryTask", async () => {

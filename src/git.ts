@@ -195,6 +195,21 @@ export class GitManager {
     }
   }
 
+  /** Return the current HEAD SHA on the task's worktree branch, or null if
+   *  the worktree directory doesn't exist yet (or git can't read it). Used by
+   *  the scheduler's signal+HEAD advance rule to confirm the agent actually
+   *  produced a commit during the session. */
+  async getWorktreeHeadSha(taskId: string): Promise<string | null> {
+    const dir = this.paths.worktreeDir(taskId);
+    if (!(await pathExists(dir))) return null;
+    try {
+      const sha = (await simpleGit(dir).revparse(["HEAD"])).trim();
+      return sha.length > 0 ? sha : null;
+    } catch {
+      return null;
+    }
+  }
+
   async removeWorktree(
     taskId: string,
     opts?: { branch?: string; branchMerged?: boolean },

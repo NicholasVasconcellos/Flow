@@ -277,7 +277,12 @@ async function handleCommand(
       // --- task.* ---------------------------------------------------------
       case "task.retry":
       case "task.resume": {
-        await flow.retryTask(cmd.taskId);
+        // Fire-and-forget: clients observe progress via the event stream, not
+        // the WS reply. Awaiting here would orphan the pipeline if the client
+        // disconnects mid-run.
+        void flow.retryTask(cmd.taskId).catch((err: Error) => {
+          replyError(`task.retry failed: ${err.message}`);
+        });
         return;
       }
       case "task.cancel": {
