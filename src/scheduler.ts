@@ -10,7 +10,7 @@ import type {
 } from "./types.js";
 import type { AgentRunner } from "./agent.js";
 import type { StateStore } from "./state.js";
-import type { GitManager, CommitMessage } from "./git.js";
+import type { GitManager } from "./git.js";
 import type { EventBus } from "./events.js";
 import type { Paths } from "./paths.js";
 import { newId, nowIso } from "./ids.js";
@@ -104,36 +104,50 @@ async function readIfExists(filePath: string): Promise<string | null> {
   }
 }
 
-/** Parse "subject\n\n- bullet\n- bullet" style commit message out of
- * whatever assistant text the commit session produced. */
-export function parseCommitMessage(
-  text: string,
-): { subject: string; bullets: string[] } | null {
-  if (!text) return null;
-  const lines = text.split("\n").map((l) => l.trimEnd());
-  // find first non-empty line as subject
-  let i = 0;
-  while (i < lines.length && lines[i]!.trim().length === 0) i++;
-  if (i >= lines.length) return null;
-  const subject = lines[i]!.trim();
-  const bullets: string[] = [];
-  for (let j = i + 1; j < lines.length; j++) {
-    const line = lines[j]!;
-    const m = /^\s*-\s+(.+)$/.exec(line);
-    if (m) bullets.push(m[1]!.trim());
-  }
-  return { subject, bullets };
+/** Stage signal payload the agent writes to `.flow/tasks/<id>/stage.json` to
+ *  tell the orchestrator the stage finished cleanly (or is blocked). */
+export interface StageSignal {
+  stage: string;
+  status: "done" | "blocked";
+  reason?: string;
 }
 
-function extractAssistantText(session: Session): string {
-  // The session object itself doesn't carry assistant text — it only carries
-  // summary numbers + error. For the commit/mergeResolve pipelines, we rely on
-  // the session having a specifically-shaped `prompt`/output. In v1 we piggy-
-  // back on session.error being empty and fall back to the default commit
-  // message. When the AgentRunner is extended to expose the accumulated
-  // assistant text, this helper becomes the single extension point.
-  const anyS = session as unknown as { assistantText?: string };
-  return anyS.assistantText ?? "";
+async function readStageSignal(
+  paths: Paths,
+  taskId: string,
+): Promise<StageSignal | null> {
+  const file = paths.taskStageSignal(taskId);
+  let body: string;
+  try {
+    body = await fs.readFile(file, "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(body) as Partial<StageSignal>;
+    if (
+      parsed &&
+      typeof parsed.stage === "string" &&
+      (parsed.status === "done" || parsed.status === "blocked")
+    ) {
+      return {
+        stage: parsed.stage,
+        status: parsed.status,
+        ...(parsed.reason ? { reason: parsed.reason } : {}),
+      };
+    }
+  } catch {
+    /* malformed — treat as missing */
+  }
+  return null;
+}
+
+async function clearStageSignal(paths: Paths, taskId: string): Promise<void> {
+  try {
+    await fs.unlink(paths.taskStageSignal(taskId));
+  } catch {
+    /* ignore */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -294,22 +308,16 @@ export class Scheduler {
     taskId: string,
     handle: TaskHandle,
   ): Promise<TaskRuntime> {
-    // Agent stages ---------------------------------------------------------
     const stages = stagesFor(this.config);
 
-    // Find starting index: if the task is resuming a paused/blocked stage,
-    // re-enter that stage; otherwise start at `spec`.
     const task0 = this.requireTask(taskId);
     if (!task0.startedAt) {
       task0.startedAt = nowIso();
     }
 
-    // If task was paused/blocked mid-pipeline, resume at task.stage.
     const resumeStage: TaskStage = task0.stage ?? "spec";
     let startIndex = stages.indexOf(resumeStage as AgentStage);
     if (startIndex < 0) {
-      // Could be "done"/"merged" already, or the stage was skipped. Start
-      // from spec unless already past the agent stages.
       if (resumeStage === "done" || resumeStage === "merged") {
         startIndex = stages.length;
       } else {
@@ -325,15 +333,12 @@ export class Scheduler {
       }
       const stage = stages[i]!;
       const result = await this.runAgentStage(taskId, stage, errorAddendum);
-      if (result.kind === "blocked") {
-        return this.requireTask(taskId);
-      }
-      if (result.kind === "paused") {
+      if (result.kind === "blocked" || result.kind === "paused") {
         return this.requireTask(taskId);
       }
       if (result.kind === "retry") {
         errorAddendum = result.addendum;
-        i--; // redo same stage
+        i--;
         continue;
       }
       errorAddendum = "";
@@ -343,17 +348,18 @@ export class Scheduler {
       return await this.pauseWithMessage(taskId, "Cancelled by user");
     }
 
-    // Commit ---------------------------------------------------------------
-    const commitResult = await this.runCommitStage(taskId);
-    if (commitResult.kind === "blocked" || commitResult.kind === "paused") {
-      return this.requireTask(taskId);
+    // Mark "done" between the final stage and merge so the UI can distinguish
+    // "all stages complete, ready to merge" from "merging".
+    {
+      const t = this.requireTask(taskId);
+      t.stage = "done";
+      t.status = "running";
+      t.updatedAt = nowIso();
+      this.state.upsertTask(t);
+      await this.saveState();
+      this.eventBus.emit("task.upsert", { task: { ...t } });
     }
 
-    if (handle.cancelled) {
-      return await this.pauseWithMessage(taskId, "Cancelled by user");
-    }
-
-    // Merge ----------------------------------------------------------------
     const mergeResult = await this.runMergeStage(taskId);
     if (mergeResult.kind === "paused") {
       return this.requireTask(taskId);
@@ -375,7 +381,6 @@ export class Scheduler {
     | { kind: "paused" }
     | { kind: "blocked" }
   > {
-    // Set stage + running
     let task = this.requireTask(taskId);
     task.stage = stage;
     task.status = "running";
@@ -385,7 +390,6 @@ export class Scheduler {
     await this.saveState();
     this.eventBus.emit("task.upsert", { task: { ...task } });
 
-    // Worktree
     if (!task.worktreePath) {
       const { worktreePath, branchName } = await this.git.createWorktree(taskId);
       task = this.requireTask(taskId);
@@ -399,9 +403,13 @@ export class Scheduler {
 
     const worktreePath = task.worktreePath!;
 
-    // Extra prompt from summary.md + any error addendum.
+    // Clear any leftover stage signal from a previous attempt before spawning.
+    await clearStageSignal(this.paths, taskId);
+
     const summary = await readIfExists(this.paths.taskSummary(taskId));
-    const extraPrompt = [summary ?? "", errorAddendum].filter((s) => s && s.trim()).join("\n\n---\n\n");
+    const extraPrompt = [summary ?? "", errorAddendum]
+      .filter((s) => s && s.trim())
+      .join("\n\n---\n\n");
 
     const session = await this.agent.spawnAgent({
       taskId,
@@ -413,10 +421,8 @@ export class Scheduler {
       ...(extraPrompt ? { extraPrompt } : {}),
     });
 
-    // Persist the session so replaySession can find its JSONL later.
     this.state.upsertSession(session);
 
-    // Record session id regardless of outcome.
     task = this.requireTask(taskId);
     if (!task.sessionIds.includes(session.id)) {
       task.sessionIds = [...task.sessionIds, session.id];
@@ -427,25 +433,9 @@ export class Scheduler {
 
     if (session.status === "failed") {
       const err = session.error ?? `Stage ${stage} failed`;
-      // Blocked?
       if (isBlockedError(err)) {
-        task.status = "blocked";
-        task.lastError = { stage, message: err, at: nowIso() };
-        task.updatedAt = nowIso();
-        this.state.upsertTask(task);
-        await this.saveState();
-        this.eventBus.emit("task.upsert", { task: { ...task } });
-        await this.emitNotification({
-          taskId,
-          sessionId: session.id,
-          severity: "blocked",
-          title: `Task ${taskId} blocked at ${stage}`,
-          body: blockedReason(err) || err,
-        });
-        return { kind: "blocked" };
+        return await this.markBlocked(taskId, stage, session.id, err);
       }
-
-      // Retry?
       if (task.retries < this.config.retryCount) {
         task.retries += 1;
         task.lastError = { stage, message: err, at: nowIso() };
@@ -458,25 +448,60 @@ export class Scheduler {
           addendum: `# Previous attempt error\nStage ${stage} failed:\n${err}\n\nPlease fix and retry.`,
         };
       }
-
-      // Exhausted
-      task.status = "paused";
-      task.lastError = { stage, message: err, at: nowIso() };
-      task.updatedAt = nowIso();
-      this.state.upsertTask(task);
-      await this.saveState();
-      this.eventBus.emit("task.upsert", { task: { ...task } });
-      await this.emitNotification({
-        taskId,
-        sessionId: session.id,
-        severity: "error",
-        title: `Task ${taskId} paused at ${stage}`,
-        body: err,
-      });
-      return { kind: "paused" };
+      return await this.markPaused(taskId, stage, session.id, err);
     }
 
-    // Success
+    // Stage signal trumps regex parsing if present. Falls back to legacy
+    // success-implies-advance behavior when the file is absent so unmigrated
+    // skills keep working.
+    const signal = await readStageSignal(this.paths, taskId);
+    if (signal) {
+      if (signal.status === "blocked") {
+        const reason = signal.reason || `Stage ${stage} reported blocked`;
+        return await this.markBlocked(
+          taskId,
+          stage,
+          session.id,
+          `FLOW_BLOCKED: ${reason}`,
+        );
+      }
+      if (signal.stage !== stage) {
+        // Drift — agent claimed a different stage. Treat as a failed stage so
+        // the user notices, retrying if budget allows.
+        const msg = `Stage signal mismatch: agent wrote stage="${signal.stage}" but expected "${stage}"`;
+        if (task.retries < this.config.retryCount) {
+          task.retries += 1;
+          task.lastError = { stage, message: msg, at: nowIso() };
+          task.updatedAt = nowIso();
+          this.state.upsertTask(task);
+          await this.saveState();
+          this.eventBus.emit("task.upsert", { task: { ...task } });
+          return {
+            kind: "retry",
+            addendum: `# Previous attempt error\n${msg}\n\nPlease fix and retry.`,
+          };
+        }
+        return await this.markPaused(taskId, stage, session.id, msg);
+      }
+    }
+
+    // Stage agent succeeded. Run commit_recovery if it left uncommitted work
+    // — the per-stage commit instruction in the prompt should normally make
+    // this a no-op.
+    try {
+      const dirty = await this.git.hasUncommittedChanges(taskId);
+      if (dirty) {
+        const recovered = await this.runCommitRecovery(taskId, stage);
+        if (recovered.kind === "paused") return { kind: "paused" };
+        if (recovered.kind === "blocked") return { kind: "blocked" };
+      }
+    } catch {
+      /* defensive — recovery is best-effort */
+    }
+
+    await clearStageSignal(this.paths, taskId);
+
+    task = this.requireTask(taskId);
     task.lastError = undefined;
     task.updatedAt = nowIso();
     this.state.upsertTask(task);
@@ -485,127 +510,95 @@ export class Scheduler {
     return { kind: "ok" };
   }
 
-  // -------------------------------------------------------------------------
-  // Commit stage
-  // -------------------------------------------------------------------------
-
-  private async runCommitStage(
+  private async markBlocked(
     taskId: string,
-  ): Promise<{ kind: "ok" } | { kind: "paused" } | { kind: "blocked" }> {
-    let task = this.requireTask(taskId);
-    task.stage = "done";
-    task.status = "running";
+    stage: AgentStage,
+    sessionId: string,
+    err: string,
+  ): Promise<{ kind: "blocked" }> {
+    const task = this.requireTask(taskId);
+    task.status = "blocked";
+    task.lastError = { stage, message: err, at: nowIso() };
     task.updatedAt = nowIso();
     this.state.upsertTask(task);
     await this.saveState();
     this.eventBus.emit("task.upsert", { task: { ...task } });
+    await this.emitNotification({
+      taskId,
+      sessionId,
+      severity: "blocked",
+      title: `Task ${taskId} blocked at ${stage}`,
+      body: blockedReason(err) || err,
+    });
+    return { kind: "blocked" };
+  }
 
+  private async markPaused(
+    taskId: string,
+    stage: AgentStage,
+    sessionId: string,
+    err: string,
+  ): Promise<{ kind: "paused" }> {
+    const task = this.requireTask(taskId);
+    task.status = "paused";
+    task.lastError = { stage, message: err, at: nowIso() };
+    task.updatedAt = nowIso();
+    this.state.upsertTask(task);
+    await this.saveState();
+    this.eventBus.emit("task.upsert", { task: { ...task } });
+    await this.emitNotification({
+      taskId,
+      sessionId,
+      severity: "error",
+      title: `Task ${taskId} paused at ${stage}`,
+      body: err,
+    });
+    return { kind: "paused" };
+  }
+
+  /** Spawn a tight commit-only agent when a stage finished with dirty
+   *  worktree state. Pauses the task if it can't produce a clean tree. */
+  private async runCommitRecovery(
+    taskId: string,
+    parentStage: AgentStage,
+  ): Promise<{ kind: "ok" } | { kind: "paused" } | { kind: "blocked" }> {
+    const task = this.requireTask(taskId);
     const worktreePath = task.worktreePath!;
-
-    // Stage everything BEFORE the commit agent runs so its `git diff --cached`
-    // shows the actual payload. Otherwise the agent sees nothing staged and
-    // correctly emits FLOW_BLOCKED per its skill contract.
-    try {
-      await this.git.stageAllInWorktree(taskId);
-    } catch {
-      /* best-effort; commitAllInWorktree re-stages idempotently */
-    }
 
     const session = await this.agent.spawnAgent({
       taskId,
-      stage: "commit",
+      stage: "commit_recovery",
       skillName: "commit",
       worktreePath,
       task: taskDefView(task),
-      contextFiles: task.contextFiles,
+      extraPrompt: `Stage \`${parentStage}\` finished but left uncommitted changes in the worktree. Stage and commit them with a tight one-liner subject + concise bullet body, then terminate.`,
     });
-
     this.state.upsertSession(session);
 
-    task = this.requireTask(taskId);
-    if (!task.sessionIds.includes(session.id)) {
-      task.sessionIds = [...task.sessionIds, session.id];
+    const t = this.requireTask(taskId);
+    if (!t.sessionIds.includes(session.id)) {
+      t.sessionIds = [...t.sessionIds, session.id];
     }
-    task.currentSessionId = session.id;
+    t.currentSessionId = session.id;
+    this.state.upsertTask(t);
 
     if (session.status === "failed") {
-      if (isBlockedError(session.error)) {
-        task.status = "blocked";
-        task.lastError = {
-          stage: "done",
-          message: session.error ?? "",
-          at: nowIso(),
-        };
-        task.updatedAt = nowIso();
-        this.state.upsertTask(task);
-        await this.saveState();
-        this.eventBus.emit("task.upsert", { task: { ...task } });
-        await this.emitNotification({
-          taskId,
-          sessionId: session.id,
-          severity: "blocked",
-          title: `Task ${taskId} blocked at commit`,
-          body: blockedReason(session.error),
-        });
-        return { kind: "blocked" };
+      const err = session.error ?? "commit_recovery failed";
+      if (isBlockedError(err)) {
+        return await this.markBlocked(taskId, parentStage, session.id, err);
       }
-      task.status = "paused";
-      task.lastError = {
-        stage: "done",
-        message: session.error ?? "commit failed",
-        at: nowIso(),
-      };
-      task.updatedAt = nowIso();
-      this.state.upsertTask(task);
-      await this.saveState();
-      this.eventBus.emit("task.upsert", { task: { ...task } });
-      await this.emitNotification({
-        taskId,
-        sessionId: session.id,
-        severity: "error",
-        title: `Task ${taskId} paused at commit`,
-        body: session.error ?? "commit failed",
-      });
-      return { kind: "paused" };
+      return await this.markPaused(taskId, parentStage, session.id, err);
     }
 
-    // Try to extract commit message from assistant text attached to session.
-    // If unavailable (v1), fall back to a deterministic default.
-    const text = extractAssistantText(session);
-    const parsed = parseCommitMessage(text);
-    const message: CommitMessage = parsed ?? {
-      subject: `task(${taskId}): ${task.title}`,
-      bullets: [],
-    };
-
-    try {
-      await this.git.commitAllInWorktree(taskId, message);
-    } catch (err) {
-      task.status = "paused";
-      task.lastError = {
-        stage: "done",
-        message: (err as Error).message,
-        at: nowIso(),
-      };
-      task.updatedAt = nowIso();
-      this.state.upsertTask(task);
-      await this.saveState();
-      this.eventBus.emit("task.upsert", { task: { ...task } });
-      await this.emitNotification({
+    const stillDirty = await this.git.hasUncommittedChanges(taskId);
+    if (stillDirty) {
+      return await this.markPaused(
         taskId,
-        severity: "error",
-        title: `Task ${taskId} commit failed`,
-        body: (err as Error).message,
-      });
-      return { kind: "paused" };
+        parentStage,
+        session.id,
+        `commit_recovery left uncommitted changes after running.`,
+      );
     }
-
-    task.stage = "done";
-    task.status = "done";
-    task.updatedAt = nowIso();
-    this.state.upsertTask(task);
-    await this.saveState();
-    this.eventBus.emit("task.upsert", { task: { ...task } });
     return { kind: "ok" };
   }
 
@@ -616,7 +609,6 @@ export class Scheduler {
   private async runMergeStage(
     taskId: string,
   ): Promise<{ kind: "ok" } | { kind: "paused" }> {
-    // Attempt merge once
     let result: Awaited<ReturnType<GitManager["mergeTaskIntoMain"]>>;
     try {
       result = await this.git.mergeTaskIntoMain(taskId);
@@ -625,8 +617,6 @@ export class Scheduler {
     }
 
     if (!result.ok) {
-      // Conflict — run mergeResolve session pointed at worktree with
-      // conflict paths in contextFiles.
       const task = this.requireTask(taskId);
       const worktreePath = task.worktreePath!;
       const session = await this.agent.spawnAgent({
@@ -636,6 +626,14 @@ export class Scheduler {
         worktreePath,
         task: taskDefView(task),
         contextFiles: result.conflictPaths,
+        extraPrompt: [
+          "# Merge resolution",
+          `Conflicting files (relative to project root): ${result.conflictPaths.join(", ")}.`,
+          "Resolve each conflict preserving both sides' intent where possible.",
+          "Stage every resolved file. Do not modify any non-conflicted file.",
+          "Do not run `git commit` — the orchestrator runs `git commit --no-edit`.",
+          "Terminate as soon as every listed file is conflict-marker-free and staged.",
+        ].join("\n"),
       });
 
       this.state.upsertSession(session);
@@ -654,10 +652,6 @@ export class Scheduler {
         );
       }
 
-      // Guard against the agent staging a "resolved" file whose body still
-      // contains <<<<<<< / ======= / >>>>>>> markers — `git commit --no-edit`
-      // would otherwise ship them to main because the index is technically
-      // resolved once the file is staged.
       const unresolved = await this.git.scanForConflictMarkers(
         result.conflictPaths,
       );
@@ -685,7 +679,6 @@ export class Scheduler {
       }
     }
 
-    // Success — remove worktree, mark merged.
     const task = this.requireTask(taskId);
     try {
       await this.git.removeWorktree(taskId, {
@@ -701,7 +694,10 @@ export class Scheduler {
     task.updatedAt = nowIso();
     this.state.upsertTask(task);
 
-    // Recompute readiness; emit upserts for anyone whose status changed.
+    // Post-merge: copy progress.txt to learnings/<id>.md if non-empty so the
+    // UI's learning feed has something to display per task.
+    await this.publishLearning(taskId);
+
     const changed = this.state.recomputeReadiness();
     await this.saveState();
     this.eventBus.emit("task.upsert", { task: { ...task } });
@@ -709,6 +705,30 @@ export class Scheduler {
       this.eventBus.emit("task.upsert", { task: { ...other } });
     }
     return { kind: "ok" };
+  }
+
+  private async publishLearning(taskId: string): Promise<void> {
+    const progressPath = this.paths.taskProgressTxt(taskId);
+    let body: string;
+    try {
+      body = await fs.readFile(progressPath, "utf8");
+    } catch {
+      return;
+    }
+    const trimmed = body.trim();
+    if (!trimmed) return;
+    const learningPath = this.paths.learningFile(taskId);
+    try {
+      await fs.mkdir(this.paths.learningsDir, { recursive: true });
+      await fs.writeFile(learningPath, trimmed + "\n", "utf8");
+    } catch {
+      return;
+    }
+    this.eventBus.emit("learning", {
+      taskId,
+      path: learningPath,
+      markdown: trimmed,
+    });
   }
 
   private async mergePause(

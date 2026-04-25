@@ -83,5 +83,28 @@ Report: list each test file created and confirm the failure mode is "implementat
 - Do not write tests that are impossible to satisfy (testing internal implementation details that may change).
 - Do not add comments explaining what the code "should" do — the test description is the documentation.
 
-If you cannot proceed safely or need human judgment, output a single line:
-`FLOW_BLOCKED: <one-sentence reason>`.
+## Progress notes
+
+Read `progress.txt` (mentioned via `@progress.txt` in your prompt) at the
+start. Append a one-line note when you finish that captures anything a later
+stage needs to know — file paths added, frameworks chosen, blockers worked
+around. Do not turn it into a journal; one line is the target.
+
+## Termination
+
+When every acceptance criterion has a test, the test files are in place, and
+those tests fail with "implementation missing" rather than syntax/import
+errors, **stop immediately**. Do not write implementation, polish unrelated
+files, or add tangential tests. Any extra work is out of scope.
+
+## Stage signal
+
+After your final commit, write the stage signal exactly once:
+
+```
+echo '{"stage":"spec","status":"done"}' > <stage signal path from prompt>
+```
+
+If you cannot proceed safely, write `{"stage":"spec","status":"blocked","reason":"…"}`
+to the same file instead and exit. The orchestrator only advances when this
+file is present, so do not skip it.

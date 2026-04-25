@@ -68,11 +68,6 @@ export async function startWsServer(opts: WsServerOpts): Promise<WsServer> {
       broadcast({ type: "learning", taskId, path, markdown }),
     ),
   );
-  offs.push(
-    bus.on("suggestion", ({ taskId, path, markdown }) =>
-      broadcast({ type: "suggestion", taskId, path, markdown }),
-    ),
-  );
   offs.push(bus.on("config", ({ config }) => broadcast({ type: "config", config })));
   offs.push(
     bus.on("error", (err) => {
@@ -317,6 +312,25 @@ async function handleCommand(
         // flow.updateConfig emits `config` on the bus which broadcasts to all
         // clients. No need for a direct reply — the broadcast is authoritative.
         void next;
+        return;
+      }
+      case "config.stages.get": {
+        const cfg = flow.getConfig();
+        reply({ type: "config.stages", stages: cfg.stages ?? {} });
+        return;
+      }
+      case "config.stages.update": {
+        const cfg = flow.getConfig();
+        const merged = { ...(cfg.stages ?? {}) };
+        for (const [k, v] of Object.entries(cmd.stages)) {
+          merged[k as keyof typeof merged] = {
+            ...(merged[k as keyof typeof merged] ?? {}),
+            ...v,
+          };
+        }
+        await flow.updateConfig({ stages: merged });
+        const after = flow.getConfig();
+        reply({ type: "config.stages", stages: after.stages ?? {} });
         return;
       }
     }

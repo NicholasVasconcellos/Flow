@@ -1,62 +1,28 @@
 ---
 name: mergeResolve
-description: Resolve merge conflicts in the listed files — pick the semantically correct resolution, stage the results.
+description: Resolve merge conflicts in the listed files — pick the semantically correct resolution, stage the results, then stop.
 ---
 
 # mergeResolve
 
-Resolve the merge conflicts reported when this task's branch was merged
-into `main`. The conflicting file paths are in `contextFiles`.
+The orchestrator started a merge that hit conflicts. Your prompt's
+`extraPrompt` lists the conflicting paths and the resolution rule.
 
-## Goal
+For each conflicting path:
 
-For each file in `contextFiles`, produce a single resolved version that
-preserves the **semantic intent of both sides** where possible, and stage
-the result so the merge can complete. Do not touch files that were not in
-conflict.
+1. Open the file. Locate every `<<<<<<<` / `=======` / `>>>>>>>` block.
+2. Combine both sides where they're independent. Where intent genuinely
+   conflicts, prefer this task's branch and note the choice in a comment.
+3. Remove every conflict marker. The file must contain none when you save.
+4. `git add <path>`.
 
-## How to work
+Touch only the listed files. Do not commit — the orchestrator runs
+`git commit --no-edit` after you exit.
 
-1. For each path in `contextFiles`, open the file and locate the conflict
-   markers:
+## Termination
 
-   ```
-   <<<<<<< HEAD
-   ...their version (main)...
-   =======
-   ...our version (this task's branch)...
-   >>>>>>> flow/<taskId>
-   ```
+When every listed file is staged and conflict-marker-free, **stop**. Do
+not run tests, reformat untouched code, or fix unrelated issues.
 
-2. For each conflict hunk, choose the resolution:
-   - **Both changes apply independently** → include both, in the order that
-     makes the file compile/read coherently.
-   - **Same construct, both sides changed** → combine them. For example, if
-     both sides added an entry to the same array or object, include both
-     entries. If both sides renamed the same variable, prefer this task's
-     rename (it matches the task's spec) unless `main`'s rename was more
-     recent policy.
-   - **Genuine conflict of intent** → prefer this task's side (the branch
-     the pipeline produced the diff for), and note the fact in a comment
-     near the change. If the choice is non-obvious and could silently break
-     functionality, emit `FLOW_BLOCKED`.
-3. Remove all `<<<<<<<`, `=======`, and `>>>>>>>` markers. Verify no
-   markers remain in any listed file.
-4. If the resolved file has a known formatter or linter
-   (`prettier`/`eslint` via package.json, `rustfmt`, `gofmt`, etc.), run
-   it on just the resolved files.
-5. Stage the resolved files: `git add <path>` for each. Do not run
-   `git commit` — the orchestrator runs `git commit --no-edit` to finalize.
-
-## Rules
-
-- **Only touch files in `contextFiles`.** If resolving one file requires a
-  change elsewhere (imports, a moved symbol), flag it in a short summary
-  and emit `FLOW_BLOCKED` rather than widening the blast radius silently.
-- Do not rewrite or reformat hunks that were not in conflict. Keep the
-  resolved file's non-conflict lines byte-identical to the input.
-- Never delete code on the losing side of a conflict without noting it.
-- Do not add new features or fix pre-existing bugs during a merge.
-
-If you cannot proceed safely or need human judgment, output a single line:
+If you cannot resolve a conflict safely, output a single line:
 `FLOW_BLOCKED: <one-sentence reason>`.

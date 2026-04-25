@@ -83,20 +83,20 @@ export class Paths {
     return path.join(this.taskDir(taskId), "summary.md");
   }
 
+  taskStageSignal(taskId: string): string {
+    return path.join(this.taskDir(taskId), "stage.json");
+  }
+
+  taskProgressTxt(taskId: string): string {
+    return path.join(this.taskDir(taskId), "progress.txt");
+  }
+
   get learningsDir(): string {
     return path.join(this.flowDir, "learnings");
   }
 
   learningFile(taskId: string): string {
     return path.join(this.learningsDir, `${taskId}.md`);
-  }
-
-  get suggestionsDir(): string {
-    return path.join(this.flowDir, "suggestions");
-  }
-
-  suggestionFile(taskId: string): string {
-    return path.join(this.suggestionsDir, `${taskId}.md`);
   }
 
   get notificationsJsonl(): string {

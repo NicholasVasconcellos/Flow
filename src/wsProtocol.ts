@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { EffortSchema } from "./types.js";
 import type {
   Config,
   Dag,
@@ -7,6 +8,8 @@ import type {
   ProjectSummary,
   Session,
   SessionEvent,
+  StageKey,
+  StageOverride,
   TaskRuntime,
 } from "./types.js";
 
@@ -86,6 +89,21 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
     patch: z.record(z.unknown()),
     requestId: z.string().optional(),
   }),
+  z.object({
+    type: z.literal("config.stages.get"),
+    requestId: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("config.stages.update"),
+    stages: z.record(
+      z.string(),
+      z.object({
+        model: z.string().optional(),
+        effort: EffortSchema.optional(),
+      }),
+    ),
+    requestId: z.string().optional(),
+  }),
 ]);
 
 export type ClientCommand = z.infer<typeof ClientCommandSchema>;
@@ -111,6 +129,6 @@ export type ServerEvent =
   | { type: "session.ended"; session: Session }
   | { type: "notification"; notification: Notification }
   | { type: "learning"; taskId: string; path: string; markdown: string }
-  | { type: "suggestion"; taskId: string; path: string; markdown: string }
   | { type: "config"; config: Config }
+  | { type: "config.stages"; stages: Partial<Record<StageKey, StageOverride>> }
   | { type: "error"; requestId?: string; message: string };

@@ -127,5 +127,11 @@ List any missing tools, MCP servers, or configurations that would materially hel
 - Do not report a service as `connected` if the verification request failed or was not attempted.
 - Do not install missing tools or set up missing services — report them and let the user decide.
 
+## Termination
+
+When the discovery report has been emitted and `CODEBASE.md` is current,
+**stop**. Do not install missing tooling, edit source files, or write tests.
+Any extra work is out of scope for setup.
+
 If you cannot proceed safely or need human judgment, output a single line:
 `FLOW_BLOCKED: <one-sentence reason>`.

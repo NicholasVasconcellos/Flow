@@ -93,7 +93,32 @@ export class GitManager {
       branchName,
       this.mainBranch,
     ]);
+
+    // Seed an empty progress.txt for cross-stage notes. It lives under the
+    // task artefacts dir (outside the worktree) so it survives worktree
+    // removal and is the single carry-over between stages.
+    const progressPath = this.paths.taskProgressTxt(taskId);
+    await fs.mkdir(path.dirname(progressPath), { recursive: true });
+    try {
+      await fs.writeFile(progressPath, "", { flag: "wx" });
+    } catch {
+      // File already exists from a prior run — leave its contents intact.
+    }
+
     return { worktreePath, branchName };
+  }
+
+  /** True iff the task's worktree has any uncommitted changes (staged or
+   *  unstaged or untracked). Used by the scheduler to decide whether the
+   *  commit_recovery agent needs to run after a stage. */
+  async hasUncommittedChanges(taskId: string): Promise<boolean> {
+    const git = simpleGit(this.paths.worktreeDir(taskId));
+    try {
+      const out = await git.raw(["status", "--porcelain"]);
+      return out.trim().length > 0;
+    } catch {
+      return false;
+    }
   }
 
   async removeWorktree(

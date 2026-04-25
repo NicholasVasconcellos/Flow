@@ -26,6 +26,29 @@ export type TaskStage = z.infer<typeof TaskStageSchema>;
 export const ThinkingModeSchema = z.enum(["off", "think", "megathink", "ultrathink"]);
 export type ThinkingMode = z.infer<typeof ThinkingModeSchema>;
 
+export const EffortSchema = z.enum(["low", "med", "high", "xhigh", "max"]);
+export type Effort = z.infer<typeof EffortSchema>;
+
+export const StageKeySchema = z.enum([
+  "setup",
+  "getTasks",
+  "spec",
+  "exec",
+  "exec_ui_check",
+  "code_review",
+  "code_review_ui_check",
+  "documentation",
+  "mergeResolve",
+  "commit_recovery",
+]);
+export type StageKey = z.infer<typeof StageKeySchema>;
+
+export const StageConfigSchema = z.object({
+  model: z.string(),
+  effort: EffortSchema,
+});
+export type StageConfig = z.infer<typeof StageConfigSchema>;
+
 export const TaskDefSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -65,7 +88,7 @@ export type TaskRuntime = z.infer<typeof TaskRuntimeSchema>;
 
 export const SessionStageSchema = z.union([
   TaskStageSchema,
-  z.enum(["setup", "getTasks", "commit", "mergeResolve"]),
+  z.enum(["setup", "getTasks", "commit", "commit_recovery", "mergeResolve"]),
 ]);
 export type SessionStage = z.infer<typeof SessionStageSchema>;
 
@@ -93,6 +116,9 @@ export const SessionSchema = z.object({
   provider: z.literal("claude-code"),
   model: z.string(),
   thinkingMode: ThinkingModeSchema.optional(),
+  effort: EffortSchema.optional(),
+  /** UI grouping — count of prior sessions for the same (taskId, stage). */
+  ordinal: z.number().int().nonnegative().optional(),
   skillName: z.string(),
   prompt: z.string(),
   status: SessionStatusSchema,
@@ -154,15 +180,33 @@ export const PricingEntrySchema = z.object({
 });
 export type PricingEntry = z.infer<typeof PricingEntrySchema>;
 
+export const StageOverrideSchema = StageConfigSchema.partial();
+export type StageOverride = z.infer<typeof StageOverrideSchema>;
+
 export const ConfigSchema = z.object({
   maxConcurrent: z.union([z.number().int().positive(), z.literal("off")]).default(3),
   retryCount: z.number().int().nonnegative().default(0),
   maxConsecutiveApiRetries: z.number().int().positive().default(5),
   hasDocs: z.boolean().default(true),
   defaults: z.object({
-    model: z.string().default("claude-sonnet-4-5"),
+    model: z.string().default("sonnet"),
+    effort: EffortSchema.default("med"),
     thinkingMode: ThinkingModeSchema.optional(),
   }),
+  stages: z
+    .object({
+      setup: StageOverrideSchema.optional(),
+      getTasks: StageOverrideSchema.optional(),
+      spec: StageOverrideSchema.optional(),
+      exec: StageOverrideSchema.optional(),
+      exec_ui_check: StageOverrideSchema.optional(),
+      code_review: StageOverrideSchema.optional(),
+      code_review_ui_check: StageOverrideSchema.optional(),
+      documentation: StageOverrideSchema.optional(),
+      mergeResolve: StageOverrideSchema.optional(),
+      commit_recovery: StageOverrideSchema.optional(),
+    })
+    .default({}),
   git: z.object({
     remote: z.string().optional(),
     mainBranch: z.string().default("main"),
@@ -230,7 +274,6 @@ export interface Events {
   "session.ended": { session: Session };
   notification: { notification: Notification };
   learning: { taskId: string; path: string; markdown: string };
-  suggestion: { taskId: string; path: string; markdown: string };
   config: { config: Config };
   error: { requestId?: string; message: string };
 }

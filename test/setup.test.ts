@@ -162,7 +162,7 @@ test("scaffoldFlowDir: copies skills, writes default config, idempotent", async 
   const cfgRaw = await fs.readFile(paths.configJson, "utf8");
   const cfg = JSON.parse(cfgRaw);
   assert.equal(cfg.maxConcurrent, 3);
-  assert.equal(cfg.defaults.model, "claude-sonnet-4-5");
+  assert.equal(cfg.defaults.model, "sonnet");
 
   // State file written.
   const stRaw = await fs.readFile(paths.stateJson, "utf8");

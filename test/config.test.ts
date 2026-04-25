@@ -24,17 +24,17 @@ test("loadConfig writes defaults when config.json missing", async () => {
   const paths = new Paths(root);
   const cfg = await loadConfig(paths);
   assert.equal(cfg.maxConcurrent, 3);
-  assert.equal(cfg.defaults.model, "claude-sonnet-4-5");
+  assert.equal(cfg.defaults.model, "sonnet");
   assert.equal(cfg.git.mainBranch, "main");
   assert.equal(cfg.ws.port, 7777);
-  assert.ok(cfg.pricing["claude-sonnet-4-5"]);
-  assert.ok(cfg.pricing["claude-opus-4-5"]);
-  assert.ok(cfg.pricing["claude-haiku-4-5"]);
+  assert.ok(cfg.pricing["sonnet"]);
+  assert.ok(cfg.pricing["opus"]);
+  assert.ok(cfg.pricing["haiku"]);
 
   // File was actually written.
   const raw = await fs.readFile(paths.configJson, "utf8");
   const parsed = JSON.parse(raw);
-  assert.equal(parsed.defaults.model, "claude-sonnet-4-5");
+  assert.equal(parsed.defaults.model, "sonnet");
 });
 
 test("loadConfig merges missing pricing defaults without overwriting user entries", async () => {

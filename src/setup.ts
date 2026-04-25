@@ -93,7 +93,6 @@ export async function scaffoldFlowDir(
   await ensureDir(paths.projectSessionsDir);
   await ensureDir(paths.worktreesDir);
   await ensureDir(paths.learningsDir);
-  await ensureDir(paths.suggestionsDir);
 
   // Copy skills. Skip files that already exist so user edits survive.
   const srcSkills = path.join(assetsDir, "skills");

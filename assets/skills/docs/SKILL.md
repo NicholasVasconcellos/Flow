@@ -72,5 +72,25 @@ For each significant change, document:
 - Do not create separate doc files per task — consolidate into the project's existing doc structure
 - Do not modify source code — only documentation files
 
-If you cannot proceed safely or need human judgment, output a single line:
-`FLOW_BLOCKED: <one-sentence reason>`.
+## Progress notes
+
+Read `progress.txt` (provided via `@progress.txt` in your prompt) at the
+start. Append a one-line note when you finish that captures any docs file
+created or surface area that newly has documentation. Keep it terse.
+
+## Termination
+
+When the docs reflect what changed and your commit is in place, **stop**.
+Do not document unrelated areas, add API references for code you did not
+touch, or restructure existing docs. Any extra work is out of scope.
+
+## Stage signal
+
+After your final commit, write the stage signal exactly once:
+
+```
+echo '{"stage":"documentation","status":"done"}' > <stage signal path from prompt>
+```
+
+If you cannot proceed safely, write `{"stage":"documentation","status":"blocked","reason":"…"}`
+instead and exit.

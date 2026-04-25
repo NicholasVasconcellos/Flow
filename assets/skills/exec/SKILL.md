@@ -108,5 +108,26 @@ Only log things that were actually non-obvious. Do not log "wrote the function" 
 - Do not install new dependencies without checking if the functionality already exists in the project.
 - Do not modify files outside the scope of this task.
 
-If you cannot proceed safely or need human judgment, output a single line:
-`FLOW_BLOCKED: <one-sentence reason>`.
+## Progress notes
+
+Read `progress.txt` (provided via `@progress.txt` in your prompt) at the
+start so you see what spec already decided. Append one line when you finish:
+the implementation plan that worked, plus any non-obvious decision a later
+stage should know about. Keep it terse.
+
+## Termination
+
+Stop the moment all tests for this task pass and you have committed the
+implementation. Do not refactor unrelated files, polish docs, or add tests
+beyond the spec. Any extra work is out of scope for this stage.
+
+## Stage signal
+
+After your final commit, write the stage signal exactly once:
+
+```
+echo '{"stage":"exec","status":"done"}' > <stage signal path from prompt>
+```
+
+If you cannot proceed safely, write `{"stage":"exec","status":"blocked","reason":"…"}`
+instead and exit. The orchestrator only advances when this file is present.

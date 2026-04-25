@@ -100,5 +100,26 @@ Output a plain-text report with these sections:
 - Do not add new features or handle edge cases not covered by the task's acceptance criteria.
 - Do not change code outside the files modified during the execute phase, except to fix a test failure directly caused by this task.
 
-If you cannot proceed safely or need human judgment, output a single line:
-`FLOW_BLOCKED: <one-sentence reason>`.
+## Progress notes
+
+Read `progress.txt` (provided via `@progress.txt` in your prompt) at the
+start to see what spec/exec already decided. Append one line when you
+finish: the verdict plus any cleanup you applied that a later stage should
+know about. One line, not a journal.
+
+## Termination
+
+When the review report says PASSED and any cleanup commits are in place,
+**stop**. Do not refactor working code, add tests, or polish files you did
+not touch during exec. Any extra work is out of scope.
+
+## Stage signal
+
+After your final commit, write the stage signal exactly once:
+
+```
+echo '{"stage":"code_review","status":"done"}' > <stage signal path from prompt>
+```
+
+If you cannot proceed safely, write `{"stage":"code_review","status":"blocked","reason":"…"}`
+instead and exit.

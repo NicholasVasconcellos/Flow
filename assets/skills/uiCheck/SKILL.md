@@ -57,5 +57,28 @@ interactions).
   not part of the worktree's tracked files.
 - If screenshot capture fails repeatedly, note it and continue; do not spin.
 
-If you cannot proceed safely or need human judgment, output a single line:
-`FLOW_BLOCKED: <one-sentence reason>`.
+## Progress notes
+
+Read `progress.txt` (mentioned via `@progress.txt` in your prompt) at the
+start. Append a one-line note when you finish — the verdict (clean / fixes
+needed) plus a pointer to the most relevant screenshot or console error.
+
+## Termination
+
+When every affected route has a screenshot, the verdict is recorded in
+`summary.md`, and any commit you produced is in place, **stop**. Do not
+edit application code or pursue regressions yourself — leave that to the
+review stage.
+
+## Stage signal
+
+After any commit, write the stage signal exactly once. The stage name in
+the signal must match the stage you were spawned for (`exec_ui_check` or
+`code_review_ui_check` — see your prompt's Runtime paths block):
+
+```
+echo '{"stage":"<this stage>","status":"done"}' > <stage signal path>
+```
+
+If you cannot proceed safely, write `{"stage":"<this stage>","status":"blocked","reason":"…"}`
+instead and exit.

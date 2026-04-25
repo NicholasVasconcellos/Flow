@@ -44,7 +44,6 @@ export class EventBus {
       "session.ended",
       "notification",
       "learning",
-      "suggestion",
       "config",
       "error",
     ];

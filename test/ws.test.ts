@@ -25,8 +25,10 @@ function makeConfig(): Config {
   return {
     maxConcurrent: 3,
     retryCount: 0,
+    maxConsecutiveApiRetries: 5,
     hasDocs: true,
-    defaults: { model: "claude-sonnet-4-5" },
+    defaults: { model: "claude-sonnet-4-5", effort: "med" },
+    stages: {},
     git: { mainBranch: "main", worktreeRoot: ".flow/worktrees" },
     ws: { port: 7777 },
     pricing: {},
@@ -50,7 +52,7 @@ interface FakeFlowState {
   project: Project;
   bus: EventBus;
   replayEvents: SessionEvent[];
-  lastUpdatedPatch?: Partial<Config>;
+  lastUpdatedPatch?: unknown;
   stopped: boolean;
   ackCalls: string[];
   runOnceCalls: number;
@@ -125,7 +127,7 @@ function makeFakeFlow(): { flow: Flow; ctx: FakeFlowState } {
     },
     async updateConfig(patch) {
       ctx.lastUpdatedPatch = patch;
-      ctx.config = { ...ctx.config, ...patch } as Config;
+      ctx.config = { ...ctx.config, ...(patch as Partial<Config>) } as Config;
       ctx.project = { ...ctx.project, config: ctx.config };
       bus.emit("config", { config: ctx.config });
       return ctx.config;
@@ -306,7 +308,11 @@ test("config.update broadcasts patched config", async () => {
               (m as { type: "config"; config: Config }).config.retryCount === 2,
           ).length > 0,
       );
-      assert.equal(ctx.lastUpdatedPatch?.retryCount, 2);
+      assert.equal(
+        (ctx.lastUpdatedPatch as { retryCount?: number } | undefined)
+          ?.retryCount,
+        2,
+      );
       assert.equal(
         c.messages.filter((m) => m.type === "config").length > initialCount,
         true,

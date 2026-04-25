@@ -118,5 +118,11 @@ List every action the user must take manually before execution can begin — API
 - Do not invent constraints that are not in the inputs.
 - Do not paste the tasks JSON into your final message — write `.flow/tasks.json` and reference it.
 
+## Termination
+
+When `.flow/tasks.json` has been written, validated as JSON, and the
+post-output checklist is appended to your final message, **stop**. Do not
+continue to refine the task list, scaffold code, or run tests.
+
 If you cannot proceed safely or need human judgment, output a single line:
 `FLOW_BLOCKED: <one-sentence reason>`.

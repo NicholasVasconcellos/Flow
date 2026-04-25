@@ -154,14 +154,21 @@ test("composePrompt references skill via @path and includes task + context files
     prompt.startsWith(`@${paths.skillFile("exec")}`),
     "prompt must begin with @<skill-path>",
   );
-  assert.match(prompt, /# Task/);
-  assert.match(prompt, /Title: Build widget/);
-  assert.match(prompt, /Description: Creates a new widget component/);
+  assert.match(prompt, /# Task\nBuild widget/);
+  assert.match(prompt, /Creates a new widget component/);
+  // Old framing labels are gone.
+  assert.doesNotMatch(prompt, /Title:/);
+  assert.doesNotMatch(prompt, /Description:/);
+  assert.match(prompt, /# Runtime paths/);
+  assert.match(prompt, /progress\.txt:/);
+  assert.match(prompt, /stage signal:/);
+  assert.match(prompt, /# Progress notes/);
   assert.match(prompt, /# Context files/);
   assert.match(prompt, /@src\/a\.ts/);
   assert.match(prompt, /@src\/b\.ts/);
   assert.match(prompt, /Prior session summaries/);
   assert.match(prompt, /Prev stage notes/);
+  assert.match(prompt, /# Stage protocol/);
 });
 
 test("composePrompt omits sections with no content", async () => {

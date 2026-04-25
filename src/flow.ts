@@ -17,6 +17,7 @@ import {
   loadConfig,
   mergeConfigPatch,
   saveConfig,
+  type ConfigPatch,
 } from "./config.js";
 import { buildDag as buildDagFromTasks } from "./dag.js";
 import { newId } from "./ids.js";
@@ -59,7 +60,7 @@ export interface Flow {
   on<K extends keyof Events>(ev: K, cb: (e: Events[K]) => void): () => void;
 
   getConfig(): Config;
-  updateConfig(patch: Partial<Config>): Promise<Config>;
+  updateConfig(patch: ConfigPatch): Promise<Config>;
   ensureTasksLoaded(): Promise<void>;
   stop(): void;
   getProject(): Project;
@@ -235,7 +236,7 @@ class FlowImpl implements Flow {
     return this.config;
   }
 
-  async updateConfig(patch: Partial<Config>): Promise<Config> {
+  async updateConfig(patch: ConfigPatch): Promise<Config> {
     const next = mergeConfigPatch(this.config, patch);
     await saveConfig(this.paths, next);
     // Mutate the shared config reference in place so downstream holders

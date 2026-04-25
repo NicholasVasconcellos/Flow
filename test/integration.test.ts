@@ -158,6 +158,53 @@ function makeFakeAgent(
         await entry.sideEffect(args);
       }
 
+      // Mimic the new "agent commits its own work" rule: if the worktree has
+      // uncommitted changes after the stage, stage and commit them. Project-
+      // level stages (setup/getTasks) skip this since they don't run inside a
+      // task worktree.
+      if (args.taskId) {
+        try {
+          const wt = simpleGit(args.worktreePath);
+          const status = await wt.status();
+          if (!status.isClean()) {
+            await wt.raw([
+              "-c",
+              "user.email=flow@localhost",
+              "-c",
+              "user.name=Flow",
+              "add",
+              "-A",
+            ]);
+            await wt.raw([
+              "-c",
+              "user.email=flow@localhost",
+              "-c",
+              "user.name=Flow",
+              "commit",
+              "-m",
+              `${args.stage}: fake stage commit`,
+              "--allow-empty",
+            ]);
+          }
+        } catch {
+          /* best-effort */
+        }
+
+        // Write the stage signal so the scheduler advances deterministically.
+        const willFail =
+          (entry?.override?.status as string | undefined) === "failed" ||
+          (entry?.override?.status as string | undefined) === "autocompacted";
+        if (!willFail) {
+          const file = paths.taskStageSignal(args.taskId);
+          await fs.mkdir(path.dirname(file), { recursive: true });
+          await fs.writeFile(
+            file,
+            JSON.stringify({ stage: args.stage, status: "done" }),
+            "utf8",
+          );
+        }
+      }
+
       const sessionId = args.sessionId ?? newId();
       calls.push({ taskId: args.taskId, stage: args.stage, sessionId });
 
@@ -248,6 +295,52 @@ function makeFakeAgent(
  *  - commit supplies a commit message via `assistantText`
  *  - everything else succeeds with a no-op
  */
+/** Commit any dirty changes in the worktree (mirrors the new "agent commits
+ *  its own work" rule) and write a `done` stage signal so the scheduler
+ *  advances. Skips both when the session is going to be reported as failed. */
+async function finalizeStage(
+  paths: Paths,
+  args: SpawnArgs,
+  failed: boolean,
+): Promise<void> {
+  if (!args.taskId) return;
+  if (!failed) {
+    try {
+      const wt = simpleGit(args.worktreePath);
+      const status = await wt.status();
+      if (!status.isClean()) {
+        await wt.raw([
+          "-c",
+          "user.email=flow@localhost",
+          "-c",
+          "user.name=Flow",
+          "add",
+          "-A",
+        ]);
+        await wt.raw([
+          "-c",
+          "user.email=flow@localhost",
+          "-c",
+          "user.name=Flow",
+          "commit",
+          "-m",
+          `${args.stage}: fake stage commit`,
+          "--allow-empty",
+        ]);
+      }
+    } catch {
+      /* ignore */
+    }
+    const file = paths.taskStageSignal(args.taskId);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(
+      file,
+      JSON.stringify({ stage: args.stage, status: "done" }),
+      "utf8",
+    );
+  }
+}
+
 function happyScripts(): StageScripts {
   return {
     exec: {
@@ -258,12 +351,6 @@ function happyScripts(): StageScripts {
           `export const ${taskId}_marker = ${JSON.stringify(taskId)};\n`,
           "utf8",
         );
-      },
-    },
-    commit: {
-      override: {
-        assistantText:
-          "feat: add generated file\n\n- adds generated file\n- integration test marker",
       },
     },
   };
@@ -424,14 +511,14 @@ test(
         mergeCommits.length >= 2,
         `expected >=2 merge commits on main (--no-ff), got ${mergeCommits.length}`,
       );
-      // And the task commit subject from our fake commit message.
+      // Per-stage commits should appear (one per stage that wrote files).
       const joined = log.all
         .map((l) => `${l.message}\n${l.body ?? ""}`)
         .join("\n---\n");
       assert.match(
         joined,
-        /feat: add generated file/,
-        "task commit subject should appear in main's history",
+        /exec: fake stage commit/,
+        "exec stage commit should appear in main's history",
       );
 
       // And the generated files should be present on main post-merge.
@@ -801,6 +888,7 @@ test(
           if (args.stage === "spec") {
             specCalls += 1;
             if (specCalls === 1) {
+              await finalizeStage(paths, args, true);
               return {
                 ...base,
                 status: "failed",
@@ -816,10 +904,7 @@ test(
               "utf8",
             );
           }
-          if (args.stage === "commit") {
-            base.assistantText =
-              "chore: retry path success\n\n- recovered after spec failure";
-          }
+          await finalizeStage(paths, args, false);
           return base;
         },
       };
@@ -895,6 +980,7 @@ test(
             exitCode: 0,
           };
           if (args.stage === "spec") {
+            await finalizeStage(paths, args, true);
             return {
               ...base,
               status: "failed",
@@ -902,6 +988,7 @@ test(
               exitCode: 1,
             };
           }
+          await finalizeStage(paths, args, false);
           return base;
         },
       };
@@ -997,6 +1084,7 @@ test(
         }
         if (args.stage === "code_review") {
           codeReviewCalls += 1;
+          await finalizeStage(paths, args, true);
           return {
             ...base,
             status: "failed",
@@ -1004,6 +1092,7 @@ test(
             exitCode: 0,
           };
         }
+        await finalizeStage(paths, args, false);
         return base;
       },
     };

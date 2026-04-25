@@ -4,15 +4,17 @@ import { execa, type ExecaError, type ResultPromise } from "execa";
 
 import { Paths } from "./paths.js";
 import { EventBus } from "./events.js";
-import { costFor } from "./config.js";
-import { newClaudeSessionId, newId, nowIso } from "./ids.js";
+import { costFor, resolveEffort, resolveStageConfig } from "./config.js";
+import { newClaudeSessionId, newId } from "./ids.js";
 import { appendJsonl, writeJsonAtomic } from "./atomic.js";
 import type {
   Config,
+  Effort,
   Notification,
   Session,
   SessionEvent,
   SessionEventKind,
+  StageKey,
   TaskDef,
   ThinkingMode,
 } from "./types.js";
@@ -23,12 +25,15 @@ export interface SpawnArgs {
   skillName: string;
   model?: string;
   thinkingMode?: ThinkingMode;
+  effort?: Effort;
   extraPrompt?: string;
   worktreePath: string;
   parentSessionId?: string;
   contextFiles?: string[];
   task?: TaskDef;
   sessionId?: string;
+  /** UI grouping ordinal — auto-computed from prior sessions if omitted. */
+  ordinal?: number;
 }
 
 /**
@@ -73,6 +78,27 @@ const STDIO_DRAIN_GRACE_MS = 2_000;
 // Prompt composition (exported for tests)
 // ---------------------------------------------------------------------------
 
+/** Stages where the agent is doing actual work in the task's worktree —
+ *  these all get the standard commit + termination + stage-signal preamble.
+ *  Project-level stages (setup, getTasks) do not commit or signal. */
+const TASK_AGENT_STAGES = new Set<string>([
+  "spec",
+  "exec",
+  "exec_ui_check",
+  "code_review",
+  "code_review_ui_check",
+  "documentation",
+  "mergeResolve",
+  "commit_recovery",
+]);
+
+const THINKING_KEYWORD: Record<ThinkingMode, string> = {
+  off: "",
+  think: "Use the `think` thinking budget for this turn.",
+  megathink: "Use the `megathink` thinking budget for this turn.",
+  ultrathink: "Use the `ultrathink` thinking budget for this turn.",
+};
+
 export async function composePrompt(
   deps: Pick<AgentRunnerDeps, "paths">,
   args: SpawnArgs,
@@ -91,45 +117,41 @@ export async function composePrompt(
   }
   const sections: string[] = [`@${skillPath}`];
 
+  // Optional thinking-budget hint, derived from the resolved effort tier.
+  if (args.thinkingMode && args.thinkingMode !== "off") {
+    const hint = THINKING_KEYWORD[args.thinkingMode];
+    if (hint) sections.push(hint);
+  }
+
   const task = args.task;
   if (task) {
     const title = (task.title ?? "").trim();
     const desc = (task.description ?? "").trim();
-    const parts: string[] = ["# Task"];
-    parts.push(`ID: ${task.id}`);
-    if (title) parts.push(`Title: ${title}`);
-    if (desc) parts.push(`Description: ${desc}`);
-    sections.push(parts.join("\n"));
+    const heading = title || task.id;
+    const body = desc ? `${heading}\n\n${desc}` : heading;
+    sections.push(`# Task\n${body}`);
   }
 
-  // Make the worktree / main-project split explicit. Without this, agents
-  // see a `<taskId>` placeholder and either guess a slug (writing artifacts
-  // to the wrong directory) or extrapolate from absolute artifact paths to
-  // write source code into the main project — stomping on other tasks'
-  // worktrees.
   if (args.taskId && deps.paths) {
     const summaryPath = deps.paths.taskSummary(args.taskId);
     const screenshotsDir = deps.paths.taskScreenshotsDir(args.taskId);
+    const progressPath = deps.paths.taskProgressTxt(args.taskId);
+    const stageSignalPath = deps.paths.taskStageSignal(args.taskId);
     sections.push(
       [
         "# Runtime paths",
-        `Task ID: ${args.taskId}`,
-        `Worktree (your cwd): ${args.worktreePath}`,
-        "",
-        "Source code: **edit files only inside the worktree above**. Use paths",
-        "relative to cwd (e.g. `src/foo.ts`) or absolute paths that begin with",
-        "the worktree path. Never touch files under any other project root.",
-        "",
-        "Task artefacts (summary.md, screenshots) are written to the main",
-        "project's `.flow/tasks/<taskId>/` directory so they survive worktree",
-        "removal. Use these absolute paths verbatim:",
-        `  summary.md:       ${summaryPath}`,
-        `  screenshots dir:  ${screenshotsDir}`,
-        "",
-        "Whenever the skill body refers to `<taskId>` or to `.flow/tasks/<taskId>/...`,",
-        "substitute the Task ID above and the absolute artefact paths above.",
+        `cwd (worktree): ${args.worktreePath}`,
+        `summary.md:     ${summaryPath}`,
+        `progress.txt:   ${progressPath}`,
+        `screenshots:    ${screenshotsDir}`,
+        `stage signal:   ${stageSignalPath}`,
+        "Edit only files inside cwd. Wherever the skill mentions `<taskId>`,",
+        `substitute "${args.taskId}".`,
       ].join("\n"),
     );
+
+    // Surface progress.txt as a context file so each stage sees prior notes.
+    sections.push(`# Progress notes\n@${progressPath}`);
   }
 
   const ctx = args.contextFiles ?? [];
@@ -141,6 +163,25 @@ export async function composePrompt(
   const extra = (args.extraPrompt ?? "").trim();
   if (extra) {
     sections.push(`# Prior session summaries / addendum\n${extra}`);
+  }
+
+  if (args.taskId && TASK_AGENT_STAGES.has(args.stage as string)) {
+    const stageSignalPath = deps.paths.taskStageSignal(args.taskId);
+    const progressPath = deps.paths.taskProgressTxt(args.taskId);
+    sections.push(
+      [
+        "# Stage protocol",
+        "1. Read `progress.txt` first; append a one-line note when you finish.",
+        "2. Do exactly the work this stage's skill requires — no adjacent cleanup.",
+        "3. When the acceptance checks for this stage pass, commit your changes:",
+        '   `git add -A && git commit -m "<imperative subject ≤72 chars>"`.',
+        "   Body bullets describing each meaningful change are encouraged.",
+        "4. Write the stage signal and stop:",
+        `   echo '{"stage":"${args.stage}","status":"done"}' > ${stageSignalPath}`,
+        '   (use `"status":"blocked","reason":"…"` instead if you cannot proceed).',
+        `   progress.txt: ${progressPath}`,
+      ].join("\n"),
+    );
   }
 
   return sections.join("\n\n");
@@ -435,6 +476,9 @@ export class AgentRunner {
   private readonly eventBus: EventBus;
   private readonly spawner: ProcessSpawner;
   private readonly nowFn: () => Date;
+  /** Per-(taskId, stage) running count of sessions spawned so the UI can
+   *  group repeated runs as "T — exec — 1", "T — exec — 2", etc. */
+  private readonly ordinalCounters = new Map<string, number>();
 
   constructor(deps: AgentRunnerDeps) {
     this.paths = deps.paths;
@@ -444,12 +488,36 @@ export class AgentRunner {
     this.nowFn = deps.now ?? (() => new Date());
   }
 
+  private computeOrdinal(taskId: string | null, stage: string): number {
+    const key = `${taskId ?? "_proj"}:${stage}`;
+    const next = (this.ordinalCounters.get(key) ?? 0) + 1;
+    this.ordinalCounters.set(key, next);
+    return next;
+  }
+
   async spawnAgent(args: SpawnArgs): Promise<Session> {
     const sessionId = args.sessionId ?? newId();
-    const model = args.model ?? this.config.defaults.model;
-    const thinkingMode = args.thinkingMode ?? this.config.defaults.thinkingMode;
 
-    const prompt = await composePrompt({ paths: this.paths }, args);
+    // Resolve per-stage model + effort. Caller can override either explicitly.
+    const stageKey = args.stage as StageKey;
+    const stageCfg = resolveStageConfig(this.config, stageKey);
+    const model = args.model ?? stageCfg.model ?? this.config.defaults.model;
+    const effort = args.effort ?? stageCfg.effort ?? this.config.defaults.effort;
+    const resolved = resolveEffort(model, effort);
+    const thinkingMode =
+      args.thinkingMode ?? resolved.thinkingMode ?? this.config.defaults.thinkingMode;
+
+    const ordinal =
+      args.ordinal ?? this.computeOrdinal(args.taskId, args.stage as string);
+
+    const promptArgs: SpawnArgs = {
+      ...args,
+      model,
+      effort,
+      ...(thinkingMode ? { thinkingMode } : {}),
+      ordinal,
+    };
+    const prompt = await composePrompt({ paths: this.paths }, promptArgs);
 
     // Claude CLI rejects non-UUID session ids, so we mint a UUID specifically
     // for the subprocess and keep it around for the /context follow-up call.
@@ -461,6 +529,8 @@ export class AgentRunner {
       stage: args.stage,
       provider: "claude-code",
       model,
+      effort,
+      ordinal,
       ...(thinkingMode ? { thinkingMode } : {}),
       skillName: args.skillName,
       prompt,
