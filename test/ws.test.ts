@@ -5,6 +5,7 @@ import { WebSocket } from "ws";
 
 import { EventBus } from "../src/events.js";
 import { startWsServer } from "../src/ws.js";
+import { Paths } from "../src/paths.js";
 import type { Flow } from "../src/flow.js";
 import type {
   Config,
@@ -143,6 +144,9 @@ function makeFakeFlow(): { flow: Flow; ctx: FakeFlowState } {
     },
     getEventBus() {
       return bus;
+    },
+    getPaths() {
+      return new Paths(ctx.project.path);
     },
     async replaySession(_sessionId) {
       const events = ctx.replayEvents;

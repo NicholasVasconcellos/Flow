@@ -13,6 +13,7 @@ import { loadConfig, mergeConfigPatch, saveConfig } from "./config.js";
 import { readJsonlLines } from "./atomic.js";
 import { topoSort } from "./dag.js";
 import { startWsServer, type WsServer } from "./ws.js";
+import { acquireLock } from "./orchestratorLock.js";
 import type { Flow } from "./flow.js";
 import type { Config, SessionEvent, TaskRuntime } from "./types.js";
 
@@ -347,6 +348,69 @@ function installSigintHandler(flow: Flow): void {
 }
 
 // ---------------------------------------------------------------------------
+// Orchestrator lock helpers
+// ---------------------------------------------------------------------------
+
+interface AcquiredCliLock {
+  release: () => Promise<void>;
+}
+
+/** Acquire the orchestrator lock for a mutating CLI handler. On conflict,
+ *  prints a message to stderr and exits 1. On success, starts a 5s heartbeat
+ *  refresh and registers SIGINT/SIGTERM handlers that release the lock before
+ *  exiting. The returned `release()` cancels the heartbeat and removes the
+ *  lock; callers should invoke it from a finally block. */
+async function acquireCliLock(
+  flow: Flow,
+  command: string,
+): Promise<AcquiredCliLock> {
+  const paths = flow.getPaths();
+  const result = await acquireLock(paths, command);
+  if ("conflict" in result) {
+    const c = result.conflict;
+    // eslint-disable-next-line no-console
+    console.error(
+      chalk.red(
+        `orchestrator already running (pid ${c.pid}, host ${c.host}, command ${c.command}) — submit via WS or wait`,
+      ),
+    );
+    process.exit(1);
+  }
+
+  const acquired = result;
+  let released = false;
+
+  const heartbeat = setInterval(() => {
+    void acquired.refresh().catch(() => {
+      /* swallow — release on shutdown is best-effort anyway */
+    });
+  }, 5_000);
+  heartbeat.unref?.();
+
+  const release = async (): Promise<void> => {
+    if (released) return;
+    released = true;
+    clearInterval(heartbeat);
+    try {
+      await acquired.released();
+    } catch {
+      /* ignore — lock cleanup is best-effort */
+    }
+  };
+
+  // Best-effort cleanup on signal-driven shutdown. We don't call process.exit
+  // here — the existing per-command SIGINT handler (or commander's default)
+  // owns the exit lifecycle. We just make sure the lock file is removed.
+  const onSignal = (): void => {
+    void release();
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+
+  return { release };
+}
+
+// ---------------------------------------------------------------------------
 // DAG rendering
 // ---------------------------------------------------------------------------
 
@@ -457,7 +521,10 @@ program
   .command("status")
   .description("table of tasks, stages, active sessions")
   .action(async () => {
-    const flow = await createFlow({ projectPath: process.cwd() });
+    const flow = await createFlow({
+      projectPath: process.cwd(),
+      readOnly: true,
+    });
     const tasks = flow.getTasks();
     // eslint-disable-next-line no-console
     console.log(formatStatusTable(tasks));
@@ -468,7 +535,10 @@ program
   .command("dag")
   .description("print DAG as ascii")
   .action(async () => {
-    const flow = await createFlow({ projectPath: process.cwd() });
+    const flow = await createFlow({
+      projectPath: process.cwd(),
+      readOnly: true,
+    });
     // eslint-disable-next-line no-console
     console.log(renderDag(flow.getTasks()));
     flow.stop();
@@ -480,6 +550,7 @@ program
   .action(async () => {
     const flow = await createFlow({ projectPath: process.cwd() });
     installSigintHandler(flow);
+    const lock = await acquireCliLock(flow, "run-once");
     const unsubscribe = subscribeToFlow(flow);
     const spinner = ora("Preparing tasks...").start();
     try {
@@ -496,6 +567,7 @@ program
     } finally {
       unsubscribe();
       flow.stop();
+      await lock.release();
     }
   });
 
@@ -506,6 +578,7 @@ program
   .action(async (opts: { limit?: number }) => {
     const flow = await createFlow({ projectPath: process.cwd() });
     installSigintHandler(flow);
+    const lock = await acquireCliLock(flow, "run-all-once");
     const unsubscribe = subscribeToFlow(flow);
     const spinner = ora("Preparing tasks...").start();
     try {
@@ -518,6 +591,7 @@ program
     } finally {
       unsubscribe();
       flow.stop();
+      await lock.release();
     }
   });
 
@@ -528,6 +602,7 @@ program
   .action(async (opts: { limit?: number }) => {
     const flow = await createFlow({ projectPath: process.cwd() });
     installSigintHandler(flow);
+    const lock = await acquireCliLock(flow, "run-all");
     const unsubscribe = subscribeToFlow(flow);
     const spinner = ora("Preparing tasks...").start();
     try {
@@ -540,6 +615,7 @@ program
     } finally {
       unsubscribe();
       flow.stop();
+      await lock.release();
     }
   });
 
@@ -549,6 +625,7 @@ program
   .action(async (taskId: string) => {
     const flow = await createFlow({ projectPath: process.cwd() });
     installSigintHandler(flow);
+    const lock = await acquireCliLock(flow, "retry");
     const unsubscribe = subscribeToFlow(flow);
     try {
       await flow.retryTask(taskId);
@@ -559,6 +636,7 @@ program
     } finally {
       unsubscribe();
       flow.stop();
+      await lock.release();
     }
   });
 
@@ -578,6 +656,7 @@ program
     }) => {
       const flow = await createFlow({ projectPath: process.cwd() });
       installSigintHandler(flow);
+      const lock = await acquireCliLock(flow, "resume-all");
       const unsubscribe = subscribeToFlow(flow);
       const spinner = ora("Preparing tasks...").start();
       try {
@@ -602,6 +681,7 @@ program
       } finally {
         unsubscribe();
         flow.stop();
+        await lock.release();
       }
     },
   );
@@ -630,6 +710,7 @@ program
   .option("--port <n>", "port", (v) => Number.parseInt(v, 10))
   .action(async (opts: { port?: number }) => {
     const flow = await createFlow({ projectPath: process.cwd() });
+    const lock = await acquireCliLock(flow, "serve");
     let server: WsServer | null = null;
     let fired = false;
     const handler = (): void => {
@@ -652,6 +733,11 @@ program
         } catch {
           /* ignore */
         }
+        try {
+          await lock.release();
+        } catch {
+          /* ignore */
+        }
         process.exit(130);
       })();
     };
@@ -669,6 +755,7 @@ program
       console.error(chalk.red(`serve failed: ${(err as Error).message}`));
       process.exitCode = 1;
       flow.stop();
+      await lock.release();
     }
   });
 

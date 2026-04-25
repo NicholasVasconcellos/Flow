@@ -23,6 +23,10 @@ export class Paths {
     return path.join(this.flowDir, "state.json");
   }
 
+  get orchestratorLock(): string {
+    return path.join(this.flowDir, "orchestrator.lock");
+  }
+
   get skillsDir(): string {
     return path.join(this.flowDir, "skills");
   }

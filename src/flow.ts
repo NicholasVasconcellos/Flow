@@ -65,6 +65,7 @@ export interface Flow {
   stop(): void;
   getProject(): Project;
   getEventBus(): EventBus;
+  getPaths(): Paths;
   replaySession(sessionId: string): Promise<AsyncIterable<SessionEvent>>;
   listNotifications(): Promise<Notification[]>;
   ackNotification(id: string): Promise<void>;
@@ -287,6 +288,10 @@ class FlowImpl implements Flow {
     return this.eventBus;
   }
 
+  getPaths(): Paths {
+    return this.paths;
+  }
+
   async replaySession(sessionId: string): Promise<AsyncIterable<SessionEvent>> {
     const session = this.state.getSession(sessionId);
     const taskId = session?.taskId ?? null;
@@ -413,7 +418,7 @@ function buildProjectSnapshot(
 // ---------------------------------------------------------------------------
 
 export async function createFlow(
-  opts: { projectPath: string; assetsDir?: string },
+  opts: { projectPath: string; assetsDir?: string; readOnly?: boolean },
   overrides?: FlowOverrides,
 ): Promise<Flow> {
   const projectPath = path.resolve(opts.projectPath);
@@ -446,7 +451,14 @@ export async function createFlow(
   // Clear out any tasks left `status=running` by a previous orchestrator
   // that was killed mid-run. No worker exists yet in this fresh process,
   // so everything flagged as running is an orphan.
-  await scheduler.recoverStaleTasks();
+  //
+  // Skipped for read-only invocations (`flow status`, `dag`, `logs`) — those
+  // commands must never mutate task state, since they're often run while a
+  // sibling orchestrator (`run-all`, `serve`) is alive. The scheduler will
+  // additionally skip the sweep if a live lock from another PID exists.
+  if (!opts.readOnly) {
+    await scheduler.recoverStaleTasks();
+  }
 
   // If tasks.json already exists, sync defs into state + recompute readiness.
   // We do this via setupEnsureTasksLoaded, which is a no-op agent call when

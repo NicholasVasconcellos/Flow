@@ -15,6 +15,7 @@ import type { EventBus } from "./events.js";
 import type { Paths } from "./paths.js";
 import { newId, nowIso } from "./ids.js";
 import { readyTasks } from "./dag.js";
+import { readLiveLock } from "./orchestratorLock.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -214,8 +215,16 @@ export class Scheduler {
   /** Reset tasks left in `status=running` by a previous orchestrator crash
    *  or kill. Call once at Flow startup — when the Scheduler is fresh there
    *  is no live worker for anything, so any task still flagged as `running`
-   *  is an orphan from a previous process. */
+   *  is an orphan from a previous process.
+   *
+   *  Skips entirely if a live orchestrator lock owned by a different PID
+   *  exists — that sibling is the real owner of any `running` tasks and we
+   *  must not stomp its state. */
   async recoverStaleTasks(): Promise<TaskRuntime[]> {
+    const live = await readLiveLock(this.paths);
+    if (live && live.pid !== process.pid) {
+      return [];
+    }
     const recovered: TaskRuntime[] = [];
     for (const task of this.state.getTasks()) {
       if (task.status !== "running") continue;
