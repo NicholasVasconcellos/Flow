@@ -734,6 +734,7 @@ export class AgentRunner {
       stageCfg.repeatToolCallCap ?? this.config.repeatToolCallCap;
     let stallTimer: NodeJS.Timeout | null = null;
     let stalledByWatchdog = false;
+    let sawRateLimitEvent = false;
     let loopedToolKey: string | null = null;
     let loopedToolCount = 0;
     /** Hash of `(toolName, command)` -> count, scoped to this session. */
@@ -826,14 +827,27 @@ export class AgentRunner {
           consecutiveRetries = 0;
         }
 
-        // E1: wall-clock progress watchdog. Only assistant text and non-empty
-        // tool_result events count — tool_use bookkeeping and thinking frames
-        // can fire continuously while a child is hung on a GUI modal.
+        if (payloadType === "rate_limit_event") {
+          sawRateLimitEvent = true;
+        }
+
+        // E1: wall-clock progress watchdog. Assistant text, non-empty tool_result,
+        // and Task-subagent progress frames count as activity. Tool_use bookkeeping
+        // and thinking frames don't — they can fire continuously while a child is
+        // hung on a GUI modal. Task subagents don't surface their inner stream on
+        // the parent process; only `system.task_progress` / `system.task_updated`
+        // frames mark forward motion, so they must refresh the timer too.
         if (kind === "assistant_text") {
           const txt = extractAssistantText(payload).trim();
           if (txt.length > 0) bumpProgress();
         } else if (kind === "tool_result") {
           if (hasNonEmptyToolResult(payload)) bumpProgress();
+        } else if (
+          payloadType === "system" &&
+          (payloadSubtype === "task_progress" ||
+            payloadSubtype === "task_updated")
+        ) {
+          bumpProgress();
         }
 
         // E2: same-Bash-command repeat cap. Inspect every tool_use block in
@@ -946,9 +960,15 @@ export class AgentRunner {
       session.error = `looped_on_blocked_tool: agent re-issued the same Bash command ${loopedToolCount} times: ${truncated}`;
     } else if (stalledByWatchdog) {
       // E1: wall-clock stall. Treated as a normal stage failure (consumes a
-      // retry slot) per the plan — Phase D would reclassify in the future.
+      // retry slot) — except when the session also saw a rate_limit_event,
+      // in which case the stall is almost certainly an upstream backoff
+      // window and should ride the transient-retry path so it doesn't burn
+      // a regular retry slot.
       session.status = "failed";
       session.error = `Stall: no assistant progress for ${stallTimeoutMs}ms`;
+      if (sawRateLimitEvent) {
+        session.transientError = true;
+      }
     } else if (stale) {
       session.status = "failed";
       session.error = `Session stale: ${consecutiveRetries} consecutive api_retry events with no progress`;

@@ -561,3 +561,188 @@ test("project-level session meta has non-null id matching the session ULID", asy
   assert.equal(meta.id, session.id);
   assert.notEqual(meta.id, null);
 });
+
+// ---------------------------------------------------------------------------
+// Stall watchdog: Task subagent activity + rate-limit reclassification
+// ---------------------------------------------------------------------------
+
+interface StallScriptFrame {
+  /** JSON line to emit, or `null` to just sleep. */
+  line: string | null;
+  /** Sleep AFTER yielding this line (or just sleep, if line is null). */
+  delayMs: number;
+}
+
+function makeStallSpawner(frames: StallScriptFrame[]): {
+  spawner: ProcessSpawner;
+  call: { value: FakeCall | null };
+} {
+  const ref: { value: FakeCall | null } = { value: null };
+  const spawner: ProcessSpawner = ({ bin, args, cwd }) => {
+    const call: FakeCall = { bin, args, cwd, killed: false };
+    ref.value = call;
+
+    let exitResolve!: (n: number) => void;
+    const exit = new Promise<number>((r) => {
+      exitResolve = r;
+    });
+    let stopped = false;
+
+    const sleep = (ms: number): Promise<void> =>
+      new Promise((r) => setTimeout(r, ms).unref?.());
+
+    async function* stdoutGen(): AsyncIterable<string> {
+      try {
+        for (const frame of frames) {
+          if (stopped) return;
+          if (frame.line !== null) yield frame.line;
+          if (stopped) return;
+          if (frame.delayMs > 0) await sleep(frame.delayMs);
+        }
+      } finally {
+        setImmediate(() => exitResolve(0));
+      }
+    }
+
+    async function* stderrGen(): AsyncIterable<string> {
+      // none
+      if (stopped) return;
+    }
+
+    return {
+      stdout: stdoutGen(),
+      stderr: stderrGen(),
+      exit,
+      kill(signal?: NodeJS.Signals) {
+        call.killed = true;
+        call.killSignal = signal;
+        stopped = true;
+        exitResolve(0);
+      },
+    };
+  };
+  return { spawner, call: ref };
+}
+
+function makeStallRunner(
+  root: string,
+  spawner: ProcessSpawner,
+  stallTimeoutMs: number,
+): { runner: AgentRunner; paths: Paths; bus: EventBus } {
+  const paths = new Paths(root);
+  const bus = new EventBus();
+  const config = { ...defaultConfig(), stallTimeoutMs };
+  const runner = new AgentRunner({
+    paths,
+    config,
+    eventBus: bus,
+    spawner,
+    now: () => new Date(),
+  });
+  return { runner, paths, bus };
+}
+
+test("task_progress refreshes the stall watchdog", async () => {
+  const root = await mkTmp();
+  const STALL_MS = 200;
+  const STEP_MS = 100;
+
+  const frames: StallScriptFrame[] = [
+    { line: JSON.stringify({ type: "system", subtype: "init" }), delayMs: 0 },
+    {
+      line: JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "starting" }] },
+      }),
+      delayMs: STEP_MS,
+    },
+  ];
+  // 6 task_progress frames spaced just under STALL_MS apart — total wall time
+  // (~600ms) is longer than STALL_MS, proving the watchdog stayed armed only
+  // because each task_progress frame refreshed it.
+  for (let i = 0; i < 6; i++) {
+    frames.push({
+      line: JSON.stringify({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "tk1",
+        tool_use_id: "tu1",
+        description: `step ${i}`,
+      }),
+      delayMs: STEP_MS,
+    });
+  }
+
+  const { spawner } = makeStallSpawner(frames);
+  const { runner, paths } = makeStallRunner(root, spawner, STALL_MS);
+  await writeSkill(paths, "exec", "skill");
+
+  const session = await runner.spawnAgent({
+    taskId: "T-stall-1",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  assert.equal(session.status, "succeeded", `error: ${session.error}`);
+  assert.doesNotMatch(session.error ?? "", /Stall:/);
+  assert.equal(session.transientError, undefined);
+});
+
+test("stall after rate_limit_event marks session as transientError", async () => {
+  const root = await mkTmp();
+  const STALL_MS = 150;
+
+  const frames: StallScriptFrame[] = [
+    { line: JSON.stringify({ type: "system", subtype: "init" }), delayMs: 0 },
+    {
+      line: JSON.stringify({
+        type: "rate_limit_event",
+        rate_limit_info: { status: "allowed", overageStatus: "rejected" },
+      }),
+      delayMs: 0,
+    },
+    // Long silence — past STALL_MS — with no progress frames.
+    { line: null, delayMs: STALL_MS * 4 },
+  ];
+
+  const { spawner } = makeStallSpawner(frames);
+  const { runner, paths } = makeStallRunner(root, spawner, STALL_MS);
+  await writeSkill(paths, "exec", "skill");
+
+  const session = await runner.spawnAgent({
+    taskId: "T-stall-2",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  assert.equal(session.status, "failed");
+  assert.match(session.error ?? "", /^Stall:/);
+  assert.equal(session.transientError, true);
+});
+
+test("stall without rate_limit_event leaves transientError unset", async () => {
+  const root = await mkTmp();
+  const STALL_MS = 150;
+
+  const frames: StallScriptFrame[] = [
+    { line: JSON.stringify({ type: "system", subtype: "init" }), delayMs: 0 },
+    { line: null, delayMs: STALL_MS * 4 },
+  ];
+
+  const { spawner } = makeStallSpawner(frames);
+  const { runner, paths } = makeStallRunner(root, spawner, STALL_MS);
+  await writeSkill(paths, "exec", "skill");
+
+  const session = await runner.spawnAgent({
+    taskId: "T-stall-3",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  assert.equal(session.status, "failed");
+  assert.match(session.error ?? "", /^Stall:/);
+  assert.equal(session.transientError, undefined);
+});
