@@ -4,7 +4,7 @@ Flow is an automated workflow orchestrator that drives multi-stage agent pipelin
 
 ## Issue tracking
 
-All known issues live as one file per issue under `issues/<issue-name>.md`. 
+All known issues live as one file per issue under `issues/<issue-name>.md`.
 
 When you find a problem (in this codebase or surfaced at runtime by Flow driving a downstream project):
 
@@ -17,7 +17,7 @@ When you find a problem (in this codebase or surfaced at runtime by Flow driving
 
 **Log only — do not implement fixes when discovering an issue.** Record the proposed fix in the issue file. Fixes are applied later in a dedicated session.
 
-If you have addressed an issue, verified the fix and commit the changes, **delete the file from `issues/`** in the same commit (or the immediately following one). The directory should reflect only what is currently open. Don't leave "FIXED" markers or historical entries — git history is the audit trail.
+If you have addressed an issue, verified the fix and commit the changes (only the files you worked on), **delete the file from `issues/`** in the same commit (or the immediately following one). The directory should reflect only what is currently open. Don't leave "FIXED" markers or historical entries — git history is the audit trail.
 
 ### Runtime issues from downstream projects
 
