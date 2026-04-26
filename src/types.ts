@@ -18,6 +18,7 @@ export const TaskStageSchema = z.enum([
   "code_review",
   "code_review_ui_check",
   "documentation",
+  "update-learning",
   "done",
   "merged",
 ]);
@@ -38,6 +39,7 @@ export const StageKeySchema = z.enum([
   "code_review",
   "code_review_ui_check",
   "documentation",
+  "update-learning",
   "mergeResolve",
   "commit_recovery",
 ]);
@@ -237,6 +239,7 @@ export const ConfigSchema = z.object({
       code_review: StageOverrideSchema.optional(),
       code_review_ui_check: StageOverrideSchema.optional(),
       documentation: StageOverrideSchema.optional(),
+      "update-learning": StageOverrideSchema.optional(),
       mergeResolve: StageOverrideSchema.optional(),
       commit_recovery: StageOverrideSchema.optional(),
     })

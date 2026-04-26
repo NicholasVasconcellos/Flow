@@ -70,6 +70,41 @@ When every affected route has a screenshot, the verdict is recorded in
 edit application code or pursue regressions yourself — leave that to the
 review stage.
 
+## Learnings
+
+After completing the task, append an entry to `learnings-draft.md` (path provided in the prompt's **Runtime paths** block) **only if** this session surfaced something a future agent on this codebase would benefit from knowing. Create the file if it doesn't exist.
+
+**Append when:**
+
+- You hit an error or surprising failure a future agent should avoid
+- You discovered a tool quirk, flag, path, or version constraint that wasn't documented
+- You deviated from the obvious approach and the reason isn't visible in the diff
+- You learned a project invariant or convention not in CLAUDE.md
+
+**Do NOT write:**
+
+- Lists of doc files updated or "docs updated" sentences
+- Restatements of the task description
+- Anything already visible in the diff or git history
+- Session logs (progress.txt and summary.md handle those)
+
+An empty draft is the correct outcome when nothing surprising came up.
+
+**Format each entry as:**
+​~~~
+
+## <tool or topic>
+
+- <one-sentence lesson title>: <2-3 sentence explanation covering what, when, why, and what to do differently. Plain terms, only relevant information.>
+
+```
+
+**Example:**
+​~~~
+## Playwright MCP
+- Headless mode silently drops file downloads: When running Playwright MCP in headless mode, `page.download()` returns success but the file never lands on disk. Use `headless: false` or switch to direct HTTP fetch for downloads.
+```
+
 ## Stage signal
 
 After any commit, write the stage signal exactly once. The stage name in

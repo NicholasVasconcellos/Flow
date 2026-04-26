@@ -52,6 +52,7 @@ export const DEFAULT_STAGE_CONFIG: Record<StageKey, StageConfig> = {
   code_review: { model: "sonnet", effort: "med" },
   code_review_ui_check: { model: "opus[1m]", effort: "med" },
   documentation: { model: "sonnet", effort: "med" },
+  "update-learning": { model: "opus[1m]", effort: "high" },
   mergeResolve: { model: "sonnet", effort: "med" },
   commit_recovery: { model: "sonnet", effort: "low" },
 };

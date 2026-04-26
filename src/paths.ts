@@ -95,6 +95,10 @@ export class Paths {
     return path.join(this.taskDir(taskId), "progress.txt");
   }
 
+  taskLearningsDraft(taskId: string): string {
+    return path.join(this.taskDir(taskId), "learnings-draft.md");
+  }
+
   get learningsDir(): string {
     return path.join(this.flowDir, "learnings");
   }

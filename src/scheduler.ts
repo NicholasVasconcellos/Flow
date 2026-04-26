@@ -38,7 +38,8 @@ export type AgentStage =
   | "exec_ui_check"
   | "code_review"
   | "code_review_ui_check"
-  | "documentation";
+  | "documentation"
+  | "update-learning";
 
 /** Full pipeline stage list (including synthetic done/merged markers). */
 export function stagesFor(config: Config): AgentStage[] {
@@ -50,6 +51,7 @@ export function stagesFor(config: Config): AgentStage[] {
     "code_review_ui_check",
   ];
   if (config.hasDocs !== false) stages.push("documentation");
+  stages.push("update-learning");
   return stages;
 }
 
@@ -66,12 +68,16 @@ export function stageSkill(stage: AgentStage): string {
       return "review";
     case "documentation":
       return "docs";
+    case "update-learning":
+      return "update-learning";
   }
 }
 
 /** Read-only stages don't produce commits — UI checks are observational
  *  (uiCheck/SKILL.md forbids editing application code) and code_review's
- *  happy path is "no findings, nothing to commit." For these stages, a
+ *  happy path is "no findings, nothing to commit." update-learning writes
+ *  to a non-tracked file outside the worktree (and may write project skills
+ *  in `.claude/skills/`, picked up by the next merge). For these stages, a
  *  `done` signal is sufficient to advance, with no HEAD-moved requirement.
  *  documentation stays strict because missing docs is a real failure mode. */
 export function stageCommitsExpected(stage: AgentStage): boolean {
@@ -79,6 +85,7 @@ export function stageCommitsExpected(stage: AgentStage): boolean {
     case "exec_ui_check":
     case "code_review_ui_check":
     case "code_review":
+    case "update-learning":
       return false;
     default:
       return true;
@@ -809,10 +816,10 @@ export class Scheduler {
   }
 
   private async publishLearning(taskId: string): Promise<void> {
-    const progressPath = this.paths.taskProgressTxt(taskId);
+    const draftPath = this.paths.taskLearningsDraft(taskId);
     let body: string;
     try {
-      body = await fs.readFile(progressPath, "utf8");
+      body = await fs.readFile(draftPath, "utf8");
     } catch {
       return;
     }

@@ -96,6 +96,7 @@ const TASK_AGENT_STAGES = new Set<string>([
   "code_review",
   "code_review_ui_check",
   "documentation",
+  "update-learning",
   "mergeResolve",
   "commit_recovery",
 ]);
@@ -145,16 +146,19 @@ export async function composePrompt(
     const screenshotsDir = deps.paths.taskScreenshotsDir(args.taskId);
     const progressPath = deps.paths.taskProgressTxt(args.taskId);
     const stageSignalPath = deps.paths.taskStageSignal(args.taskId);
+    const learningsDraftPath = deps.paths.taskLearningsDraft(args.taskId);
     sections.push(
       [
         "# Runtime paths",
-        `cwd (worktree): ${args.worktreePath}`,
-        `summary.md:     ${summaryPath}`,
-        `progress.txt:   ${progressPath}`,
-        `screenshots:    ${screenshotsDir}`,
-        `stage signal:   ${stageSignalPath}`,
-        "Edit only files inside cwd. Wherever the skill mentions `<taskId>`,",
-        `substitute "${args.taskId}".`,
+        `cwd (worktree):    ${args.worktreePath}`,
+        `summary.md:        ${summaryPath}`,
+        `progress.txt:      ${progressPath}`,
+        `learnings-draft:   ${learningsDraftPath}`,
+        `screenshots:       ${screenshotsDir}`,
+        `stage signal:      ${stageSignalPath}`,
+        "Edit only files inside cwd (except `learnings-draft.md` and the",
+        "stage signal, which live outside the worktree). Wherever the skill",
+        `mentions \`<taskId>\`, substitute "${args.taskId}".`,
       ].join("\n"),
     );
 

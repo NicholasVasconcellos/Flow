@@ -423,6 +423,7 @@ test(
       "code_review:running",
       "code_review_ui_check:running",
       "documentation:running",
+      "update-learning:running",
       "done:running",
       "merged:merged",
     ];
@@ -445,6 +446,7 @@ test(
       "code_review",
       "code_review_ui_check",
       "documentation",
+      "update-learning",
     ]);
 
     // No "commit" stage in the pipeline anymore.

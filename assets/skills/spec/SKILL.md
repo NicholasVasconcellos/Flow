@@ -14,6 +14,7 @@ Write tests for the assigned task. You are in the spec phase — implementation 
 ## Inputs
 
 You will receive:
+
 - The task title and description (including acceptance criteria)
 - The project codebase (via CODEBASE.md and direct file reads)
 
@@ -28,6 +29,7 @@ From the task criteria. Extract every acceptance criterion as a discrete, verifi
 Check `package.json`, `jest.config.*`, `vitest.config.*`, `pytest.ini`, `go.mod`, or whatever is relevant to the project language. Use the framework that is already installed. Do not introduce a new test dependency.
 
 Identify:
+
 - Test runner and its import style
 - Assertion library (if separate)
 - Where test files live (co-located with source, or in a `tests/` / `__tests__/` directory)
@@ -50,11 +52,13 @@ Do not skip error conditions. Untested error paths are where production bugs liv
 Write tests only. Do not create source files, implementation stubs, or mock modules for code that does not exist yet. If a dependency does not exist, import it anyway — the test is supposed to fail right now.
 
 Each test must:
+
 - Have a description that reads as a plain-English statement of what it verifies (e.g., `"returns 401 when token is expired"`, not `"test auth"`)
 - Be independent — no test should rely on state set by another test
 - Clean up after itself if it creates files, DB rows, or network resources
 
 Group tests logically using `describe` blocks (or the framework equivalent). Structure:
+
 ```
 describe("<module or feature name>", () => {
   describe("<sub-feature or method>", () => {
@@ -96,6 +100,41 @@ When every acceptance criterion has a test, the test files are in place, and
 those tests fail with "implementation missing" rather than syntax/import
 errors, **stop immediately**. Do not write implementation, polish unrelated
 files, or add tangential tests. Any extra work is out of scope.
+
+## Learnings
+
+After completing the task, append an entry to `learnings-draft.md` (path provided in the prompt's **Runtime paths** block) **only if** this session surfaced something a future agent on this codebase would benefit from knowing. Create the file if it doesn't exist.
+
+**Append when:**
+
+- You hit an error or surprising failure a future agent should avoid
+- You discovered a tool quirk, flag, path, or version constraint that wasn't documented
+- You deviated from the obvious approach and the reason isn't visible in the diff
+- You learned a project invariant or convention not in CLAUDE.md
+
+**Do NOT write:**
+
+- Lists of doc files updated or "docs updated" sentences
+- Restatements of the task description
+- Anything already visible in the diff or git history
+- Session logs (progress.txt and summary.md handle those)
+
+An empty draft is the correct outcome when nothing surprising came up.
+
+**Format each entry as:**
+​~~~
+
+## <tool or topic>
+
+- <one-sentence lesson title>: <2-3 sentence explanation covering what, when, why, and what to do differently. Plain terms, only relevant information.>
+
+```
+
+**Example:**
+​~~~
+## Playwright MCP
+- Headless mode silently drops file downloads: When running Playwright MCP in headless mode, `page.download()` returns success but the file never lands on disk. Use `headless: false` or switch to direct HTTP fetch for downloads.
+```
 
 ## Stage signal
 
