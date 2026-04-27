@@ -1,13 +1,13 @@
 ---
-name: getTasks
+name: get-tasks
 description: >
   Break a PRD, issue, or user description into self-contained tasks
   with dependencies. Outputs structured JSON task plan.
-  Trigger on: /getTasks
+  Trigger on: /get-tasks
 disable-model-invocation: true
 ---
 
-# getTasks
+# get-tasks
 
 Analyze the plan and decompose it into self-contained tasks.
 
@@ -27,7 +27,7 @@ Spawn a subagent to generate or update `CODEBASE.md`. Instruct the subagent to:
 
 CODEBASE.md must be:
 - Hierarchical: reflect the actual directory tree
-- Scannable: use concise annotations, not prose
+- Scannable: use concise annotations, not prose.
 - Accurate: based on the real filesystem
 
 Format example:

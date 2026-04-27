@@ -1,9 +1,9 @@
 ---
-name: mergeResolve
+name: merge-resolve
 description: Resolve merge conflicts in the listed files — pick the semantically correct resolution, stage the results, then stop.
 ---
 
-# mergeResolve
+# merge-resolve
 
 You are running in the **main checkout** (not a task worktree) mid
 `git merge`. Conflict markers live in the listed files relative to your

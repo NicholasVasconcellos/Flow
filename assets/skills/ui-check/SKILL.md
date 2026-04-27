@@ -1,9 +1,9 @@
 ---
-name: uiCheck
+name: ui-check
 description: Verify UI changes in a browser, capture screenshots, check for regressions and console errors.
 ---
 
-# uiCheck
+# ui-check
 
 Verify the task's UI changes in a real browser and flag any visible
 regressions.
@@ -51,7 +51,7 @@ interactions).
 
 ## Rules
 
-- **Do not edit application code.** uiCheck is observational. If you find a
+- **Do not edit application code.** ui-check is observational. If you find a
   regression, record it; the review stage will propose fixes.
 - Never commit screenshots to git — they live under `.flow/tasks/` which is
   not part of the worktree's tracked files.

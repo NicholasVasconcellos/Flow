@@ -1,14 +1,14 @@
 ---
-name: getTasks
+name: get-tasks
 description: >
   Break a PRD, issue, or user description into milestones and atomic tasks
   with dependency ordering. Main agent defines milestones and their
   relationships, then spawns subagents per milestone to decompose tasks.
-  Outputs structured JSON task plan. Trigger on: /getTasks
+  Outputs structured JSON task plan. Trigger on: /get-tasks
 disable-model-invocation: true
 ---
 
-# getTasks
+# get-tasks
 
 Analyze the project and decompose it into milestones and atomic tasks. The main agent owns milestone-level planning; subagents own task-level decomposition.
 
