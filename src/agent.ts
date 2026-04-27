@@ -88,7 +88,7 @@ const STDIO_DRAIN_GRACE_MS = 2_000;
 
 /** Stages where the agent is doing actual work in the task's worktree —
  *  these all get the standard commit + termination + stage-signal preamble.
- *  Project-level stages (setup, getTasks) do not commit or signal. */
+ *  Project-level stages (setup, get-tasks) do not commit or signal. */
 const TASK_AGENT_STAGES = new Set<string>([
   "spec",
   "exec",
@@ -97,7 +97,7 @@ const TASK_AGENT_STAGES = new Set<string>([
   "code_review_ui_check",
   "documentation",
   "update-learning",
-  "mergeResolve",
+  "merge-resolve",
   "commit_recovery",
 ]);
 

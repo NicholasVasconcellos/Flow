@@ -32,7 +32,7 @@ export type Effort = z.infer<typeof EffortSchema>;
 
 export const StageKeySchema = z.enum([
   "setup",
-  "getTasks",
+  "get-tasks",
   "spec",
   "exec",
   "exec_ui_check",
@@ -40,7 +40,7 @@ export const StageKeySchema = z.enum([
   "code_review_ui_check",
   "documentation",
   "update-learning",
-  "mergeResolve",
+  "merge-resolve",
   "commit_recovery",
 ]);
 export type StageKey = z.infer<typeof StageKeySchema>;
@@ -102,7 +102,7 @@ export type TaskRuntime = z.infer<typeof TaskRuntimeSchema>;
 
 export const SessionStageSchema = z.union([
   TaskStageSchema,
-  z.enum(["setup", "getTasks", "commit", "commit_recovery", "mergeResolve"]),
+  z.enum(["setup", "get-tasks", "commit", "commit_recovery", "merge-resolve"]),
 ]);
 export type SessionStage = z.infer<typeof SessionStageSchema>;
 
@@ -232,7 +232,7 @@ export const ConfigSchema = z.object({
   stages: z
     .object({
       setup: StageOverrideSchema.optional(),
-      getTasks: StageOverrideSchema.optional(),
+      "get-tasks": StageOverrideSchema.optional(),
       spec: StageOverrideSchema.optional(),
       exec: StageOverrideSchema.optional(),
       exec_ui_check: StageOverrideSchema.optional(),
@@ -240,7 +240,7 @@ export const ConfigSchema = z.object({
       code_review_ui_check: StageOverrideSchema.optional(),
       documentation: StageOverrideSchema.optional(),
       "update-learning": StageOverrideSchema.optional(),
-      mergeResolve: StageOverrideSchema.optional(),
+      "merge-resolve": StageOverrideSchema.optional(),
       commit_recovery: StageOverrideSchema.optional(),
     })
     .default({}),

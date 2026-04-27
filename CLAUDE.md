@@ -1,6 +1,6 @@
 # Flow
 
-Flow is an automated workflow orchestrator that drives multi-stage agent pipelines (spec → exec → review → commit → mergeResolve → docs) across task worktrees. It is the harness under test whenever Flow itself is run against a downstream project (e.g. `pkmn-t8`).
+Flow is an automated workflow orchestrator that drives multi-stage agent pipelines (spec → exec → review → commit → merge-resolve → docs) across task worktrees. It is the harness under test whenever Flow itself is run against a downstream project (e.g. `pkmn-t8`).
 
 ## Issue tracking
 

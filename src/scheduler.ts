@@ -63,7 +63,7 @@ export function stageSkill(stage: AgentStage): string {
       return "exec";
     case "exec_ui_check":
     case "code_review_ui_check":
-      return "uiCheck";
+      return "ui-check";
     case "code_review":
       return "review";
     case "documentation":
@@ -74,7 +74,7 @@ export function stageSkill(stage: AgentStage): string {
 }
 
 /** Read-only stages don't produce commits — UI checks are observational
- *  (uiCheck/SKILL.md forbids editing application code) and code_review's
+ *  (ui-check/SKILL.md forbids editing application code) and code_review's
  *  happy path is "no findings, nothing to commit." update-learning writes
  *  to a non-tracked file outside the worktree (and may write project skills
  *  in `.claude/skills/`, picked up by the next merge). For these stages, a
@@ -725,12 +725,12 @@ export class Scheduler {
 
     if (!result.ok) {
       const task = this.requireTask(taskId);
-      // mergeResolve runs in the main checkout (where the merge is in
+      // merge-resolve runs in the main checkout (where the merge is in
       // progress and conflict markers live), not the task's worktree.
       const session = await this.agent.spawnAgent({
         taskId,
-        stage: "mergeResolve",
-        skillName: "mergeResolve",
+        stage: "merge-resolve",
+        skillName: "merge-resolve",
         worktreePath: this.paths.projectRoot,
         task: taskDefView(task),
         contextFiles: result.conflictPaths,
@@ -756,7 +756,7 @@ export class Scheduler {
       if (session.status === "failed") {
         return this.mergePause(
           taskId,
-          session.error ?? "mergeResolve session failed",
+          session.error ?? "merge-resolve session failed",
         );
       }
 
@@ -771,7 +771,7 @@ export class Scheduler {
         }
         return this.mergePause(
           taskId,
-          `mergeResolve left conflict markers in: ${unresolved.join(", ")}`,
+          `merge-resolve left conflict markers in: ${unresolved.join(", ")}`,
         );
       }
 

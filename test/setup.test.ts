@@ -72,7 +72,7 @@ function makeFakeAgent(opts: {
         await opts.onSpawn(args);
       }
 
-      if (args.skillName === "getTasks" && opts.tasksToWrite !== undefined) {
+      if (args.skillName === "get-tasks" && opts.tasksToWrite !== undefined) {
         await fs.mkdir(path.dirname(opts.paths.tasksJson), { recursive: true });
         const body =
           typeof opts.tasksToWrite === "string"
@@ -172,15 +172,15 @@ test("scaffoldFlowDir: copies skills, writes default config, idempotent", async 
 
   // Skills copied — verify a subset.
   for (const name of [
-    "getTasks",
+    "get-tasks",
     "setup",
     "spec",
     "exec",
-    "uiCheck",
+    "ui-check",
     "review",
     "docs",
     "commit",
-    "mergeResolve",
+    "merge-resolve",
   ]) {
     const body = await fs.readFile(paths.skillFile(name), "utf8");
     assert.ok(body.length > 0, `skill ${name} has content`);
@@ -250,10 +250,10 @@ test("ensureTasksLoaded: no tasks.json → agent writes one, defs returned and s
   assert.equal(defs.length, 2);
   assert.deepEqual(defs.map((d) => d.id), ["A", "B"]);
 
-  // Both setup + getTasks sessions were spawned in order.
+  // Both setup + get-tasks sessions were spawned in order.
   assert.equal(calls.length, 2);
   assert.equal(calls[0]!.skillName, "setup");
-  assert.equal(calls[1]!.skillName, "getTasks");
+  assert.equal(calls[1]!.skillName, "get-tasks");
 
   // State was synced: tasks present, A ready (no deps), B pending.
   const tasks = state.getTasks();
@@ -320,7 +320,7 @@ test("ensureTasksLoaded: hasDocs=false skips setup session", async () => {
   });
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0]!.skillName, "getTasks");
+  assert.equal(calls[0]!.skillName, "get-tasks");
 });
 
 // ---------------------------------------------------------------------------

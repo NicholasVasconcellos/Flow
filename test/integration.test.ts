@@ -161,7 +161,7 @@ function makeFakeAgent(
       // Mimic the new "agent commits its own work" rule: stage and commit
       // any uncommitted changes after the stage, and ALWAYS make at least an
       // empty commit so the scheduler's signal+HEAD-moved advance rule sees
-      // progress. Project-level stages (setup/getTasks) skip this since they
+      // progress. Project-level stages (setup/get-tasks) skip this since they
       // don't run inside a task worktree.
       const willFail =
         (entry?.override?.status as string | undefined) === "failed" ||

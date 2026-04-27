@@ -48,20 +48,20 @@ consumes the WebSocket contract in §14.
 ├── plan.md                                  # sole user-authored input
 ├── .flow/
 │   ├── config.json                          # runtime config + price table
-│   ├── tasks.json                           # task definitions (produced by getTasks agent)
+│   ├── tasks.json                           # task definitions (produced by get-tasks agent)
 │   ├── state.json                           # runtime state, atomic writes
 │   ├── skills/
-│   │   ├── getTasks/SKILL.md
+│   │   ├── get-tasks/SKILL.md
 │   │   ├── setup/SKILL.md                   # MCP + docs discovery
 │   │   ├── spec/SKILL.md
 │   │   ├── exec/SKILL.md
-│   │   ├── uiCheck/SKILL.md
+│   │   ├── ui-check/SKILL.md
 │   │   ├── review/SKILL.md
 │   │   ├── docs/SKILL.md
 │   │   ├── commit/SKILL.md
-│   │   └── mergeResolve/SKILL.md
+│   │   └── merge-resolve/SKILL.md
 │   ├── worktrees/<taskId>/                  # git worktrees
-│   ├── sessions/<sessionId>.jsonl           # project-level sessions (setup, getTasks)
+│   ├── sessions/<sessionId>.jsonl           # project-level sessions (setup, get-tasks)
 │   ├── tasks/<taskId>/
 │   │   ├── metadata.json
 │   │   ├── sessions/<sessionId>.jsonl       # raw stream-json from Claude Code
@@ -85,7 +85,7 @@ artefacts stay preserved by id.
 All types are Zod-validated at I/O boundaries.
 
 ```ts
-// Task definition — authored by the getTasks agent, editable by the user
+// Task definition — authored by the get-tasks agent, editable by the user
 interface TaskDef {
   id: string; // ulid, stable across runs
   title: string; // short one-liner
@@ -130,8 +130,8 @@ interface TaskRuntime extends TaskDef {
 
 interface Session {
   id: string;
-  taskId: string | null; // null for project-level sessions (setup, getTasks)
-  stage: TaskStage | "setup" | "getTasks" | "commit" | "mergeResolve";
+  taskId: string | null; // null for project-level sessions (setup, get-tasks)
+  stage: TaskStage | "setup" | "get-tasks" | "commit" | "merge-resolve";
   provider: "claude-code"; // extensible later
   model: string;
   thinkingMode?: "off" | "think" | "megathink" | "ultrathink";
@@ -228,7 +228,7 @@ spec → exec → exec_ui_check → code_review → code_review_ui_check
 
 `documentation` is skipped if `config.hasDocs === false`. `merged` happens
 after a commit succeeds in the worktree; conflicts trigger a
-`mergeResolve` session before retrying the merge.
+`merge-resolve` session before retrying the merge.
 
 Transitions:
 
@@ -379,13 +379,13 @@ Autocompact detection: if any event in the stream has a
   `mainBranch`. All stages run inside that worktree.
 - On `done`: commit inside the worktree (see §13).
 - On merge: `git checkout main && git merge --no-ff flow/<taskId>` in the
-  main checkout. On conflict, spawn a `mergeResolve` session pointed at the
+  main checkout. On conflict, spawn a `merge-resolve` session pointed at the
   worktree with the conflict files in `contextFiles`. Retry the merge once
   resolved.
 - After successful merge: `git worktree remove` the task's worktree,
   task.status → `merged`.
 - New tasks added mid-run always become DAG leaves (enforced by the
-  `getTasks` skill contract); existing worktrees are never rebased.
+  `get-tasks` skill contract); existing worktrees are never rebased.
 
 ---
 
@@ -426,11 +426,11 @@ to subscribers.
 - No `plan.md` → `empty`. Chokidar watches for it.
 - `plan.md` exists but no `.flow/` → `uninitialized`; caller runs `flow init`.
 - `plan.md` + `.flow/` but no `tasks.json` → run **setup** session (MCP
-  discovery + docs fetch), then **getTasks** session to produce `tasks.json`,
+  discovery + docs fetch), then **get-tasks** session to produce `tasks.json`,
   then `buildDag()`.
 - Everything in place → `ready`.
 
-Setup and getTasks are project-level sessions (no `taskId`) stored in
+Setup and get-tasks are project-level sessions (no `taskId`) stored in
 `.flow/sessions/`. The UI renders them as a synthetic "Project Setup" row.
 
 ---
@@ -746,13 +746,13 @@ I took the following calls to keep moving. Flag anything you want different:
 4. **Cost** is computed from `config.pricing[model]` so we don't bake
    prices into code.
 5. **`plan.md` is the sole user-authored input.** `tasks.json` is always
-   produced by the `getTasks` agent. Hand edits to `tasks.json` are respected
+   produced by the `get-tasks` agent. Hand edits to `tasks.json` are respected
    once present.
-6. **Merge conflicts are agent-resolved** via a dedicated `mergeResolve`
+6. **Merge conflicts are agent-resolved** via a dedicated `merge-resolve`
    stage between `documentation` and `merged`. If you'd rather
    fail-and-notify on conflict, it's a one-line change.
 7. **No per-topic WS subscriptions in v1** — every connected client gets
    every event. Trivial to add channels later if UI ends up filtering hard.
-8. **Setup and getTasks sessions live at project level** (no `taskId`),
+8. **Setup and get-tasks sessions live at project level** (no `taskId`),
    stored under `.flow/sessions/`. Frontend shows them as a "Project" row
    above the task rows.

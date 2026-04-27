@@ -145,7 +145,7 @@ async function copySkillsTree(src: string, dest: string): Promise<void> {
 /**
  * Initialise a Flow project: scaffold `.flow/`, ensure the git repo exists.
  *
- * Does NOT auto-run setup/getTasks — those are triggered on project open via
+ * Does NOT auto-run setup/get-tasks — those are triggered on project open via
  * `ensureTasksLoaded` so the UI can render progress around them.
  */
 export async function initProject(paths: Paths, opts: InitOpts): Promise<void> {
@@ -155,7 +155,7 @@ export async function initProject(paths: Paths, opts: InitOpts): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Sessions: setup + getTasks
+// Sessions: setup + get-tasks
 // ---------------------------------------------------------------------------
 
 /**
@@ -173,7 +173,7 @@ export async function runSetupSession(deps: SetupDeps): Promise<void> {
 }
 
 /**
- * Run the `getTasks` skill at project level, read the `tasks.json` the agent
+ * Run the `get-tasks` skill at project level, read the `tasks.json` the agent
  * wrote, validate it against the schema and the DAG invariants, then return
  * the parsed task defs.
  */
@@ -183,7 +183,7 @@ export interface PlanLookup {
 }
 
 /**
- * Locate a plan/PRD markdown document the getTasks agent should decompose.
+ * Locate a plan/PRD markdown document the get-tasks agent should decompose.
  *
  * Search order (first match wins, all comparisons case-insensitive):
  *   1. Project root — any `*.md` whose stem is exactly `plan` or `prd`, or
@@ -233,7 +233,7 @@ export async function runGetTasksSession(deps: SetupDeps): Promise<TaskDef[]> {
   const lookup = await findPlan(deps.paths.projectRoot);
   if (!lookup.path) {
     const msg = [
-      `No plan document found. getTasks requires a plan/PRD markdown file.`,
+      `No plan document found. get-tasks requires a plan/PRD markdown file.`,
       `Searched:`,
       ...lookup.searched.map((s) => `  - ${s}`),
       `Place a plan document at one of those locations and retry.`,
@@ -244,8 +244,8 @@ export async function runGetTasksSession(deps: SetupDeps): Promise<TaskDef[]> {
 
   await deps.agent.spawnAgent({
     taskId: null,
-    stage: "getTasks",
-    skillName: "getTasks",
+    stage: "get-tasks",
+    skillName: "get-tasks",
     worktreePath: deps.paths.projectRoot,
     contextFiles: [lookup.path],
   });
@@ -263,7 +263,7 @@ async function readAndValidateTasksFile(deps: SetupDeps): Promise<TaskDef[]> {
     throw new Error(msg);
   }
   if (raw === null) {
-    const msg = `No tasks.json found at ${deps.paths.tasksJson} after getTasks session`;
+    const msg = `No tasks.json found at ${deps.paths.tasksJson} after get-tasks session`;
     await emitError(deps, msg);
     throw new Error(msg);
   }
@@ -307,7 +307,7 @@ async function emitError(deps: SetupDeps, body: string): Promise<void> {
 
 /**
  * If `tasks.json` already exists, parse + validate + return it. Otherwise
- * run setup (when hasDocs) then getTasks, sync the resulting defs into the
+ * run setup (when hasDocs) then get-tasks, sync the resulting defs into the
  * state store, and return them.
  */
 export async function ensureTasksLoaded(deps: SetupDeps): Promise<TaskDef[]> {

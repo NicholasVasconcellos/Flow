@@ -338,7 +338,7 @@ export class GitManager {
   }
 
   /** Return the subset of `relPaths` (relative to the project root) whose
-   *  file contents still contain literal conflict markers. A mergeResolve
+   *  file contents still contain literal conflict markers. A merge-resolve
    *  agent that stages a file without editing out `<<<<<<<` / `=======` /
    *  `>>>>>>>` leaves git's index technically resolved, so `git commit` will
    *  happily ship the markers to main. The scheduler calls this before

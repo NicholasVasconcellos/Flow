@@ -647,7 +647,7 @@ test(
 // ---------------------------------------------------------------------------
 
 test(
-  "merge conflict triggers mergeResolve with inline extraPrompt then completeMerge",
+  "merge conflict triggers merge-resolve with inline extraPrompt then completeMerge",
   { timeout: 10000 },
   async () => {
     const h = await makeHarness({
@@ -662,7 +662,7 @@ test(
     const t = await h.scheduler.runTask("A");
     assert.equal(t.status, "merged");
 
-    const mr = h.agent.calls.find((c) => c.stage === "mergeResolve");
+    const mr = h.agent.calls.find((c) => c.stage === "merge-resolve");
     assert.ok(mr);
     assert.deepEqual(mr.contextFiles, ["a.ts", "b.ts"]);
     assert.match(mr.extraPrompt ?? "", /Conflicting files/);
@@ -672,7 +672,7 @@ test(
 );
 
 test(
-  "mergeResolve that leaves conflict markers pauses the task",
+  "merge-resolve that leaves conflict markers pauses the task",
   { timeout: 10000 },
   async () => {
     const h = await makeHarness({
