@@ -41,6 +41,7 @@ export const StageKeySchema = z.enum([
   "documentation",
   "update-learning",
   "merge-resolve",
+  "merge-verify",
   "commit_recovery",
 ]);
 export type StageKey = z.infer<typeof StageKeySchema>;
@@ -102,7 +103,14 @@ export type TaskRuntime = z.infer<typeof TaskRuntimeSchema>;
 
 export const SessionStageSchema = z.union([
   TaskStageSchema,
-  z.enum(["setup", "get-tasks", "commit", "commit_recovery", "merge-resolve"]),
+  z.enum([
+    "setup",
+    "get-tasks",
+    "commit",
+    "commit_recovery",
+    "merge-resolve",
+    "merge-verify",
+  ]),
 ]);
 export type SessionStage = z.infer<typeof SessionStageSchema>;
 
@@ -160,6 +168,12 @@ export const SessionSchema = z.object({
    *  scheduler uses this to retry without consuming the agent-logic retry
    *  budget. */
   transientError: z.boolean().optional(),
+  /** Set by the agent runner when the session emitted
+   *  `FLOW_REVIEW_REQUESTED:`. The scheduler picks this up after the session
+   *  ends to persist a warn-level notification — the queue continues. */
+  reviewRequested: z
+    .object({ reason: z.string() })
+    .optional(),
   /** Forensic: child PIDs of the claude process still alive at session end,
    *  per `pgrep -P`. Best-effort; absent on systems without `pgrep`. */
   surplus_children: z.array(SurplusChildSchema).optional(),
@@ -241,6 +255,7 @@ export const ConfigSchema = z.object({
       documentation: StageOverrideSchema.optional(),
       "update-learning": StageOverrideSchema.optional(),
       "merge-resolve": StageOverrideSchema.optional(),
+      "merge-verify": StageOverrideSchema.optional(),
       commit_recovery: StageOverrideSchema.optional(),
     })
     .default({}),
@@ -248,7 +263,21 @@ export const ConfigSchema = z.object({
     remote: z.string().optional(),
     mainBranch: z.string().default("main"),
     worktreeRoot: z.string().default(".flow/worktrees"),
+    /** How to merge a completed task branch into main. `squash` collapses the
+     *  task's per-stage commits into a single commit on main; `merge` keeps
+     *  the legacy `--no-ff` merge commit shape with full per-stage history. */
+    mergeStrategy: z.enum(["squash", "merge"]).default("squash"),
   }),
+  /** Pre-merge verification gate. If `command` is set, the orchestrator runs
+   *  it from the project root after a merge has been staged but before the
+   *  final commit. Non-zero exit aborts the merge and pauses the task. */
+  verify: z
+    .object({
+      command: z.string().optional(),
+      /** Wall-clock cap for the verify command. Defaults to 5 minutes. */
+      timeoutMs: z.number().int().positive().default(300_000),
+    })
+    .default({ timeoutMs: 300_000 }),
   ws: z
     .object({
       port: z.number().int().positive().default(7777),

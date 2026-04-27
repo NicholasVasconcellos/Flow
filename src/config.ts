@@ -54,6 +54,7 @@ export const DEFAULT_STAGE_CONFIG: Record<StageKey, StageConfig> = {
   documentation: { model: "sonnet", effort: "med" },
   "update-learning": { model: "opus[1m]", effort: "high" },
   "merge-resolve": { model: "sonnet", effort: "med" },
+  "merge-verify": { model: "sonnet", effort: "med" },
   commit_recovery: { model: "sonnet", effort: "low" },
 };
 
@@ -104,6 +105,7 @@ export type ConfigPatch = {
   defaults?: Partial<Config["defaults"]>;
   stages?: Partial<Config["stages"]>;
   git?: Partial<Config["git"]>;
+  verify?: Partial<Config["verify"]>;
   ws?: Partial<Config["ws"]>;
   pricing?: Record<string, PricingEntry>;
 };
@@ -123,6 +125,10 @@ export function mergeConfigPatch(current: Config, patch: ConfigPatch): Config {
     git: {
       ...current.git,
       ...(patch.git ?? {}),
+    },
+    verify: {
+      ...current.verify,
+      ...(patch.verify ?? {}),
     },
     ws: {
       ...current.ws,

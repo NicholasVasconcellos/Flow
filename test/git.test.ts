@@ -137,7 +137,7 @@ test("commitAllInWorktree produces commit whose message matches the format", asy
   assert.equal(actual.trim(), expected.trim());
 });
 
-test("mergeTaskIntoMain clean merge succeeds", async () => {
+test("mergeTaskIntoMain (merge strategy) clean merge stages then finalizeMerge commits", async () => {
   const root = await makeTempProject();
   const paths = new Paths(root);
   const gm = new GitManager(paths, "main");
@@ -153,20 +153,73 @@ test("mergeTaskIntoMain clean merge succeeds", async () => {
     bullets: ["New file"],
   });
 
-  const result = await gm.mergeTaskIntoMain(taskId);
+  const result = await gm.mergeTaskIntoMain(taskId, "merge");
   assert.equal(result.ok, true);
-  if (result.ok) {
-    assert.match(result.sha, /^[0-9a-f]{7,40}$/);
-  }
 
-  // Main now contains b.txt.
+  // Pre-finalize: changes are staged but no merge commit yet.
+  const mergeHead = path.join(root, ".git", "MERGE_HEAD");
+  assert.equal(await pathExists(mergeHead), true, "merge in progress");
+
+  // Finalize via the orchestrator's path — merge strategy uses MERGE_MSG.
+  const sha = await gm.finalizeMerge("merge");
+  assert.match(sha, /^[0-9a-f]{7,40}$/);
   assert.equal(await pathExists(path.join(root, "b.txt")), true);
+  assert.equal(await pathExists(mergeHead), false, "merge finalized");
 
-  // Can clean up worktree + branch.
   await gm.removeWorktree(taskId, { branch: `flow/${taskId}`, branchMerged: true });
 });
 
-test("mergeTaskIntoMain with a real conflict returns conflictPaths; abortMerge cleans up", async () => {
+test("mergeTaskIntoMain (squash strategy) clean merge produces single commit on main", async () => {
+  const root = await makeTempProject();
+  const paths = new Paths(root);
+  const gm = new GitManager(paths, "main");
+
+  await writeFile(root, "a.txt", "a\n");
+  await gm.ensureRepo();
+
+  const taskId = "01SQUASH";
+  const { worktreePath } = await gm.createWorktree(taskId);
+  // Two distinct commits on the worktree branch — they should collapse to one.
+  await writeFile(worktreePath, "b.txt", "b from task\n");
+  await gm.commitAllInWorktree(taskId, {
+    subject: "Add b.txt",
+    bullets: ["first"],
+  });
+  await writeFile(worktreePath, "c.txt", "c from task\n");
+  await gm.commitAllInWorktree(taskId, {
+    subject: "Add c.txt",
+    bullets: ["second"],
+  });
+
+  const rootGit = simpleGit(root);
+  const mainBefore = await rootGit.log();
+  const result = await gm.mergeTaskIntoMain(taskId, "squash");
+  assert.equal(result.ok, true);
+
+  // Squash does not set MERGE_HEAD; changes are staged for a single commit.
+  assert.equal(
+    await pathExists(path.join(root, ".git", "MERGE_HEAD")),
+    false,
+    "squash uses no MERGE_HEAD",
+  );
+
+  const sha = await gm.finalizeMerge("squash", "Squashed task\n\nDetails here.");
+  assert.match(sha, /^[0-9a-f]{7,40}$/);
+
+  const mainAfter = await rootGit.log();
+  assert.equal(
+    mainAfter.total,
+    mainBefore.total + 1,
+    "exactly one new commit on main",
+  );
+  assert.equal(mainAfter.latest!.message, "Squashed task");
+  assert.equal(await pathExists(path.join(root, "b.txt")), true);
+  assert.equal(await pathExists(path.join(root, "c.txt")), true);
+
+  await gm.removeWorktree(taskId, { branch: `flow/${taskId}`, branchMerged: true });
+});
+
+test("mergeTaskIntoMain (merge strategy) with a real conflict returns conflictPaths; abortMerge('merge') cleans up", async () => {
   const root = await makeTempProject();
   const paths = new Paths(root);
   const gm = new GitManager(paths, "main");
@@ -189,7 +242,7 @@ test("mergeTaskIntoMain with a real conflict returns conflictPaths; abortMerge c
   await rootGit.add(["-A"]);
   await rootGit.commit("main conflicting change");
 
-  const result = await gm.mergeTaskIntoMain(taskId);
+  const result = await gm.mergeTaskIntoMain(taskId, "merge");
   assert.equal(result.ok, false);
   if (!result.ok) {
     assert.ok(result.conflictPaths.includes("conflict.txt"));
@@ -199,7 +252,7 @@ test("mergeTaskIntoMain with a real conflict returns conflictPaths; abortMerge c
   const mergeHead = path.join(root, ".git", "MERGE_HEAD");
   assert.equal(await pathExists(mergeHead), true);
 
-  await gm.abortMerge();
+  await gm.abortMerge("merge");
   assert.equal(await pathExists(mergeHead), false);
 
   // After abort, conflict.txt reads back as the pre-merge main value.
@@ -207,7 +260,51 @@ test("mergeTaskIntoMain with a real conflict returns conflictPaths; abortMerge c
   assert.equal(after, "from main\n");
 
   // Calling abortMerge again when nothing to abort should not throw.
-  await gm.abortMerge();
+  await gm.abortMerge("merge");
+});
+
+test("mergeTaskIntoMain (squash strategy) with a real conflict returns conflictPaths; abortMerge('squash') resets cleanly", async () => {
+  const root = await makeTempProject();
+  const paths = new Paths(root);
+  const gm = new GitManager(paths, "main");
+
+  await writeFile(root, "conflict.txt", "base\n");
+  await gm.ensureRepo();
+
+  const taskId = "01SQ_CONFLICT";
+  const { worktreePath } = await gm.createWorktree(taskId);
+  await writeFile(worktreePath, "conflict.txt", "from task\n");
+  await gm.commitAllInWorktree(taskId, {
+    subject: "Task change",
+    bullets: ["modify conflict.txt"],
+  });
+
+  const rootGit = simpleGit(root);
+  await writeFile(root, "conflict.txt", "from main\n");
+  await rootGit.add(["-A"]);
+  await rootGit.commit("main conflicting change");
+
+  const result = await gm.mergeTaskIntoMain(taskId, "squash");
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.conflictPaths.includes("conflict.txt"));
+  }
+
+  // Squash never sets MERGE_HEAD, so `merge --abort` is invalid.
+  // abortMerge('squash') uses `reset --hard` + `clean -fd` instead.
+  assert.equal(
+    await pathExists(path.join(root, ".git", "MERGE_HEAD")),
+    false,
+    "squash leaves no MERGE_HEAD",
+  );
+
+  await gm.abortMerge("squash");
+
+  const after = await fs.readFile(path.join(root, "conflict.txt"), "utf8");
+  assert.equal(after, "from main\n", "main contents restored after squash abort");
+
+  // Idempotent — reset on a clean tree is a no-op.
+  await gm.abortMerge("squash");
 });
 
 test("scanForConflictMarkers flags files whose contents still contain markers", async () => {

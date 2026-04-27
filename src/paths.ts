@@ -99,6 +99,12 @@ export class Paths {
     return path.join(this.taskDir(taskId), "learnings-draft.md");
   }
 
+  /** Captures stdout+stderr of the pre-merge verify command for the task.
+   *  Surfaced in the pause-notification body when the gate fails. */
+  taskVerifyLog(taskId: string): string {
+    return path.join(this.taskDir(taskId), "verify.log");
+  }
+
   get learningsDir(): string {
     return path.join(this.flowDir, "learnings");
   }

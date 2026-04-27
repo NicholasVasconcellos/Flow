@@ -1,4 +1,6 @@
 import { promises as fs } from "node:fs";
+import path from "node:path";
+import { execa } from "execa";
 
 import type {
   Config,
@@ -133,6 +135,26 @@ async function readIfExists(filePath: string): Promise<string | null> {
   }
 }
 
+/** Deterministic squash commit message — one commit per task on main, with a
+ *  footer pinning the worktree branch SHA so the per-stage history is still
+ *  reachable via reflog or `.flow/tasks/<id>/sessions/`. */
+function composeSquashCommitMessage(
+  task: TaskRuntime,
+  shortSha: string | null,
+): string {
+  const title = task.title.trim() || task.id;
+  const description = (task.description ?? "").trim();
+  const lines: string[] = [title];
+  if (description) {
+    lines.push("", description);
+  }
+  const footer = shortSha
+    ? `Includes commits from flow/${task.id} (${shortSha})`
+    : `Includes commits from flow/${task.id}`;
+  lines.push("", footer);
+  return lines.join("\n");
+}
+
 /** Stage signal payload the agent writes to `.flow/tasks/<id>/stage.json` to
  *  tell the orchestrator the stage finished cleanly (or is blocked). */
 export interface StageSignal {
@@ -196,6 +218,11 @@ export class Scheduler {
   /** Serialize state.save() calls so concurrent tasks don't race on the
    *  atomic tmp-file rename used by writeJsonAtomic. */
   private saveChain: Promise<void> = Promise.resolve();
+  /** Serialize the entire merge stage. Two tasks reaching merge near-
+   *  simultaneously would otherwise race on `git checkout main`, the merge
+   *  index, and `MERGE_HEAD`. The mutex makes the foot-gun explicit instead
+   *  of relying on `maxConcurrent === 1` as the implicit guard. */
+  private mergeMutex: Promise<void> = Promise.resolve();
 
   constructor(deps: SchedulerDeps) {
     this.paths = deps.paths;
@@ -400,7 +427,7 @@ export class Scheduler {
     }
 
     const mergeResult = await this.runMergeStage(taskId);
-    if (mergeResult.kind === "paused") {
+    if (mergeResult.kind === "paused" || mergeResult.kind === "blocked") {
       return this.requireTask(taskId);
     }
     return this.requireTask(taskId);
@@ -474,6 +501,8 @@ export class Scheduler {
     task.currentSessionId = session.id;
     task.updatedAt = nowIso();
     this.state.upsertTask(task);
+
+    await this.persistReviewRequested(session, taskId, stage);
 
     const postHead = await this.git.getWorktreeHeadSha(taskId);
     const headMoved = preHead !== postHead && postHead !== null;
@@ -687,6 +716,8 @@ export class Scheduler {
     t.currentSessionId = session.id;
     this.state.upsertTask(t);
 
+    await this.persistReviewRequested(session, taskId, "commit_recovery");
+
     if (session.status === "failed") {
       const err = session.error ?? "commit_recovery failed";
       if (isBlockedError(err)) {
@@ -713,12 +744,42 @@ export class Scheduler {
   // Merge stage
   // -------------------------------------------------------------------------
 
+  /** Run `fn` with the merge mutex held. The try/finally release is the
+   *  deadlock guard — a thrown body still releases the lock so the next
+   *  caller proceeds instead of wedging every future merge. */
+  private async withMergeLock<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = this.mergeMutex;
+    let release!: () => void;
+    this.mergeMutex = new Promise<void>((r) => {
+      release = r;
+    });
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
   private async runMergeStage(
     taskId: string,
-  ): Promise<{ kind: "ok" } | { kind: "paused" }> {
+  ): Promise<{ kind: "ok" } | { kind: "paused" } | { kind: "blocked" }> {
+    return this.withMergeLock(() => this.runMergeStageInner(taskId));
+  }
+
+  private async runMergeStageInner(
+    taskId: string,
+  ): Promise<{ kind: "ok" } | { kind: "paused" } | { kind: "blocked" }> {
+    const strategy = this.config.git.mergeStrategy ?? "squash";
+    const branch = `flow/${taskId}`;
+    // Capture the branch tip before the merge; the branch is deleted after
+    // worktree cleanup, so the squash commit footer references it via this
+    // value.
+    const shortSha = await this.git.getBranchShortSha(branch);
+
     let result: Awaited<ReturnType<GitManager["mergeTaskIntoMain"]>>;
     try {
-      result = await this.git.mergeTaskIntoMain(taskId);
+      result = await this.git.mergeTaskIntoMain(taskId, strategy);
     } catch (err) {
       return this.mergePause(taskId, (err as Error).message);
     }
@@ -737,9 +798,14 @@ export class Scheduler {
         extraPrompt: [
           "# Merge resolution",
           `Conflicting files (relative to project root): ${result.conflictPaths.join(", ")}.`,
-          "Resolve each conflict preserving both sides' intent where possible.",
+          "Combine independent changes only (different files, or non-overlapping",
+          "hunks). If both sides modified the same logical block, do NOT guess —",
+          "emit `FLOW_BLOCKED: overlapping change in <path>` instead.",
+          "If the resolution is plausible but you are not certain, stage it and",
+          "emit `FLOW_REVIEW_REQUESTED: <one-sentence reason>` so a human can",
+          "audit without halting the queue.",
           "Stage every resolved file. Do not modify any non-conflicted file.",
-          "Do not run `git commit` — the orchestrator runs `git commit --no-edit`.",
+          "Do not run `git commit` — the orchestrator finalizes the merge.",
           "Terminate as soon as every listed file is conflict-marker-free and staged.",
         ].join("\n"),
       });
@@ -753,11 +819,19 @@ export class Scheduler {
       t2.currentSessionId = session.id;
       this.state.upsertTask(t2);
 
+      await this.persistReviewRequested(session, taskId, "merge-resolve");
+
       if (session.status === "failed") {
-        return this.mergePause(
-          taskId,
-          session.error ?? "merge-resolve session failed",
-        );
+        const err = session.error ?? "merge-resolve session failed";
+        try {
+          await this.git.abortMerge(strategy);
+        } catch {
+          /* ignore */
+        }
+        if (isBlockedError(err)) {
+          return this.markBlockedAtMerge(taskId, session.id, err);
+        }
+        return this.mergePause(taskId, err);
       }
 
       const unresolved = await this.git.scanForConflictMarkers(
@@ -765,7 +839,7 @@ export class Scheduler {
       );
       if (unresolved.length > 0) {
         try {
-          await this.git.abortMerge();
+          await this.git.abortMerge(strategy);
         } catch {
           /* ignore */
         }
@@ -774,18 +848,46 @@ export class Scheduler {
           `merge-resolve left conflict markers in: ${unresolved.join(", ")}`,
         );
       }
-
-      try {
-        await this.git.completeMerge();
-      } catch (err) {
-        try {
-          await this.git.abortMerge();
-        } catch {
-          /* ignore */
-        }
-        return this.mergePause(taskId, (err as Error).message);
-      }
     }
+
+    // Pre-merge verification gate. Skipped when no command is configured.
+    const gate = await this.runVerifyGate(taskId);
+    if (!gate.ok) {
+      try {
+        await this.git.abortMerge(strategy);
+      } catch {
+        /* ignore */
+      }
+      return this.mergePause(
+        taskId,
+        `Pre-merge verify failed (exit ${gate.exitCode ?? "?"}). See ${gate.logPath} for full output.`,
+      );
+    }
+
+    // Finalize the merge commit. For `merge` strategy, MERGE_MSG carries the
+    // commit subject; for `squash`, we synthesize a deterministic message.
+    let mergeSha: string;
+    try {
+      const taskNow = this.requireTask(taskId);
+      const message =
+        strategy === "squash"
+          ? composeSquashCommitMessage(taskNow, shortSha)
+          : "";
+      mergeSha = await this.git.finalizeMerge(strategy, message);
+    } catch (err) {
+      try {
+        await this.git.abortMerge(strategy);
+      } catch {
+        /* ignore */
+      }
+      return this.mergePause(taskId, (err as Error).message);
+    }
+
+    // Post-merge semantic-diff agent. Read-only; FLOW_BLOCKED moves the task
+    // to blocked, FLOW_REVIEW_REQUESTED emits a warn notification, anything
+    // else is a pass. Runs before worktree cleanup so the agent could in
+    // principle reference per-task artefacts if its skill body asked it to.
+    const verifyOutcome = await this.runMergeVerify(taskId, mergeSha);
 
     const task = this.requireTask(taskId);
     try {
@@ -796,6 +898,14 @@ export class Scheduler {
     } catch {
       /* worktree may already be gone; not fatal */
     }
+
+    if (verifyOutcome.kind === "blocked") {
+      // Task is already marked blocked by markBlockedAtMerge; the merge
+      // commit stays on main. The user can decide whether to revert or
+      // resolve the flagged concern.
+      return verifyOutcome;
+    }
+
     task.stage = "merged";
     task.status = "merged";
     task.completedAt = nowIso();
@@ -813,6 +923,170 @@ export class Scheduler {
       this.eventBus.emit("task.upsert", { task: { ...other } });
     }
     return { kind: "ok" };
+  }
+
+  /** Spawn the post-merge semantic-diff agent. Read-only — never reverts the
+   *  merge that just landed. Returns `blocked` if the agent emitted
+   *  `FLOW_BLOCKED:`; otherwise `ok` (review-requested still surfaces a warn
+   *  notification but does not change task status). */
+  private async runMergeVerify(
+    taskId: string,
+    mergeSha: string,
+  ): Promise<{ kind: "ok" } | { kind: "blocked" }> {
+    const task = this.requireTask(taskId);
+    const session = await this.agent.spawnAgent({
+      taskId,
+      stage: "merge-verify",
+      skillName: "merge-verify",
+      worktreePath: this.paths.projectRoot,
+      task: taskDefView(task),
+      extraPrompt: [
+        "# Post-merge semantic check",
+        `Merge commit: ${mergeSha}`,
+        `Inspect with: \`git show --stat ${mergeSha}\` then \`git show ${mergeSha}\`.`,
+        "Compare the merge diff to the task title and description above.",
+        "Flag concerns where the merge:",
+        "- Drops behavior the task was supposed to add (or that landed",
+        "  earlier from a sibling task and is no longer present).",
+        "- Changes a public contract in a way the description does not justify.",
+        "- Looks like a stale-import / wrong-signature artifact of a",
+        "  conflict resolution.",
+        "Conclude with one of:",
+        "  - silence (no concerns) — the merge looks faithful to intent;",
+        "  - `FLOW_REVIEW_REQUESTED: <one-sentence concern>` — surfaces a",
+        "    warn-level notification without halting the queue;",
+        "  - `FLOW_BLOCKED: <reason>` — task moves to blocked for human review.",
+        "This is a read-only audit. Do not edit files, do not commit, do not",
+        "revert the merge.",
+      ].join("\n"),
+    });
+
+    this.state.upsertSession(session);
+    const t = this.requireTask(taskId);
+    if (!t.sessionIds.includes(session.id)) {
+      t.sessionIds = [...t.sessionIds, session.id];
+    }
+    t.currentSessionId = session.id;
+    this.state.upsertTask(t);
+
+    await this.persistReviewRequested(session, taskId, "merge-verify");
+
+    if (session.status === "failed") {
+      const err = session.error ?? "merge-verify session failed";
+      if (isBlockedError(err)) {
+        return this.markBlockedAtMerge(taskId, session.id, err);
+      }
+      // Non-blocked verify failure: the merge has already landed, so we
+      // surface a warn notification but let the task move to merged. A hard
+      // pause here would be misleading (there is nothing to retry — the
+      // commit is done).
+      await this.emitNotification({
+        taskId,
+        sessionId: session.id,
+        severity: "warn",
+        title: `Task ${taskId} merge-verify failed`,
+        body: `Merge already landed (${mergeSha}). Verify session error: ${err}`,
+      });
+    }
+    return { kind: "ok" };
+  }
+
+  /** Run `config.verify.command` from the project root after a merge has
+   *  been staged but before the final commit. Captures combined output to
+   *  `.flow/tasks/<id>/verify.log` for inclusion in the pause notification.
+   *  Returns `ok: true` when no command is configured. */
+  private async runVerifyGate(
+    taskId: string,
+  ): Promise<
+    | { ok: true }
+    | { ok: false; logPath: string; exitCode: number | null }
+  > {
+    const command = this.config.verify?.command;
+    if (!command || !command.trim()) return { ok: true };
+    const logPath = this.paths.taskVerifyLog(taskId);
+    const timeoutMs = this.config.verify?.timeoutMs ?? 300_000;
+    const startedAt = nowIso();
+
+    let exitCode: number | null = null;
+    let output = "";
+    let timedOut = false;
+    let runtimeError: string | null = null;
+    try {
+      const result = await execa(command, {
+        cwd: this.paths.projectRoot,
+        shell: true,
+        timeout: timeoutMs,
+        reject: false,
+        all: true,
+      });
+      exitCode = typeof result.exitCode === "number" ? result.exitCode : null;
+      timedOut = Boolean(result.timedOut);
+      output = typeof result.all === "string" ? result.all : "";
+    } catch (err) {
+      runtimeError = (err as Error).message;
+    }
+
+    const header = [
+      `# verify gate — task ${taskId}`,
+      `started: ${startedAt}`,
+      `cwd:     ${this.paths.projectRoot}`,
+      `command: ${command}`,
+      `exit:    ${exitCode === null ? (timedOut ? "(timeout)" : "(spawn error)") : exitCode}`,
+      runtimeError ? `error:   ${runtimeError}` : null,
+      "",
+    ]
+      .filter((line) => line !== null)
+      .join("\n");
+    try {
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+      await fs.writeFile(logPath, header + (output ?? ""), "utf8");
+    } catch {
+      /* best-effort log write */
+    }
+
+    if (exitCode === 0 && !timedOut && !runtimeError) return { ok: true };
+    return { ok: false, logPath, exitCode };
+  }
+
+  /** Persist a warn-level notification when a session ended with
+   *  `FLOW_REVIEW_REQUESTED:` set on it. The agent runner emits a real-time
+   *  bus notification mid-stream, but it is not stored — this is the
+   *  durable record. */
+  private async persistReviewRequested(
+    session: Session,
+    taskId: string,
+    stage: string,
+  ): Promise<void> {
+    if (!session.reviewRequested) return;
+    await this.emitNotification({
+      taskId,
+      sessionId: session.id,
+      severity: "warn",
+      title: `Task ${taskId} review requested at ${stage}`,
+      body: `Agent requested review: ${session.reviewRequested.reason}`,
+    });
+  }
+
+  private async markBlockedAtMerge(
+    taskId: string,
+    sessionId: string,
+    err: string,
+  ): Promise<{ kind: "blocked" }> {
+    const task = this.requireTask(taskId);
+    task.status = "blocked";
+    task.lastError = { stage: "merged", message: err, at: nowIso() };
+    task.updatedAt = nowIso();
+    this.state.upsertTask(task);
+    await this.saveState();
+    this.eventBus.emit("task.upsert", { task: { ...task } });
+    await this.emitNotification({
+      taskId,
+      sessionId,
+      severity: "blocked",
+      title: `Task ${taskId} blocked at merge`,
+      body: blockedReason(err) || err,
+    });
+    return { kind: "blocked" };
   }
 
   private async publishLearning(taskId: string): Promise<void> {

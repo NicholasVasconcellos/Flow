@@ -260,19 +260,37 @@ export class GitManager {
     return sha;
   }
 
+  /** Resolve the short SHA of the task's worktree branch tip. Captured before
+   *  the merge so it can be referenced in the squash commit footer (the
+   *  branch is deleted immediately after merge). */
+  async getBranchShortSha(branch: string): Promise<string | null> {
+    try {
+      const sha = (await this.rootGit.revparse(["--short", branch])).trim();
+      return sha.length > 0 ? sha : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Begin merging a task branch into main without finalizing the commit.
+   *  Both strategies use `--no-commit` so the orchestrator can run a verify
+   *  gate after the merge is staged but before the commit lands. The caller
+   *  finalizes via {@link finalizeMerge} or rolls back via {@link abortMerge}. */
   async mergeTaskIntoMain(
     taskId: string,
-  ): Promise<
-    | { ok: true; sha: string }
-    | { ok: false; conflictPaths: string[] }
-  > {
+    strategy: "squash" | "merge",
+  ): Promise<{ ok: true } | { ok: false; conflictPaths: string[] }> {
     const git = this.rootGit;
     await this.ensureUserIdentity(git);
     await git.checkout(this.mainBranch);
     const branch = `flow/${taskId}`;
+    const args =
+      strategy === "squash"
+        ? ["merge", "--squash", "--no-commit", branch]
+        : ["merge", "--no-ff", "--no-commit", branch];
     let caught: unknown = null;
     try {
-      await git.raw(["merge", "--no-ff", branch]);
+      await git.raw(args);
     } catch (err) {
       caught = err;
     }
@@ -285,9 +303,7 @@ export class GitManager {
       return { ok: false, conflictPaths };
     }
     if (caught) throw caught;
-
-    const sha = (await git.revparse(["HEAD"])).trim();
-    return { ok: true, sha };
+    return { ok: true };
   }
 
   private async collectConflictPaths(
@@ -329,11 +345,27 @@ export class GitManager {
     return Array.from(found);
   }
 
-  async completeMerge(): Promise<string> {
+  /** Finalize an in-progress merge that was started with `--no-commit`.
+   *  - `merge` strategy: `git commit --no-edit` consumes the auto-generated
+   *    `MERGE_MSG` produced by the merge step.
+   *  - `squash` strategy: there is no `MERGE_MSG`; the caller-supplied
+   *    `message` becomes the single commit on main. */
+  async finalizeMerge(
+    strategy: "squash" | "merge",
+    message?: string,
+  ): Promise<string> {
     const git = this.rootGit;
     await this.ensureUserIdentity(git);
     await git.add(["-A"]);
-    await git.raw(["commit", "--no-edit"]);
+    if (strategy === "squash") {
+      const body = (message ?? "").trim();
+      if (!body) {
+        throw new Error("finalizeMerge: squash strategy requires a commit message");
+      }
+      await git.raw(["commit", "-m", body]);
+    } else {
+      await git.raw(["commit", "--no-edit"]);
+    }
     return (await git.revparse(["HEAD"])).trim();
   }
 
@@ -362,9 +394,29 @@ export class GitManager {
     return unresolved;
   }
 
-  async abortMerge(): Promise<void> {
+  /** Roll back an in-progress merge.
+   *  - `merge` strategy: `git merge --abort` (uses `MERGE_HEAD`).
+   *  - `squash` strategy: `--squash` does not set `MERGE_HEAD`, so
+   *    `merge --abort` fails. Use `reset --hard HEAD` to drop the staged
+   *    squash payload, then `clean -fd` to scrub any stray untracked files
+   *    the merge attempt may have produced. */
+  async abortMerge(strategy: "squash" | "merge"): Promise<void> {
+    const git = this.rootGit;
+    if (strategy === "squash") {
+      try {
+        await git.raw(["reset", "--hard", "HEAD"]);
+      } catch {
+        /* nothing to reset */
+      }
+      try {
+        await git.raw(["clean", "-fd"]);
+      } catch {
+        /* best-effort */
+      }
+      return;
+    }
     try {
-      await this.rootGit.raw(["merge", "--abort"]);
+      await git.raw(["merge", "--abort"]);
     } catch {
       // Nothing to abort — leave quietly.
     }

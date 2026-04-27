@@ -194,9 +194,9 @@ function makeFakeAgent(
 interface FakeGitOptions {
   initialMergeResult?: Record<
     string,
-    { ok: false; conflictPaths: string[] } | { ok: true; sha: string }
+    { ok: false; conflictPaths: string[] } | { ok: true }
   >;
-  completeMergeThrowsFirst?: boolean;
+  finalizeMergeThrowsFirst?: boolean;
   markerScanReturns?: string[];
   /** Static result for hasUncommittedChanges. Defaults to false (clean). */
   hasUncommittedChanges?: boolean;
@@ -208,8 +208,16 @@ interface FakeGitHandle {
   commits: Array<{ taskId: string; message: CommitMessage }>;
   merges: string[];
   removed: string[];
+  /** Count of finalizeMerge() calls — exposed under the legacy name
+   *  `completeMergeCalls` for backwards-compatible test assertions. */
   completeMergeCalls: number;
+  finalizeMergeCalls: Array<{
+    strategy: "squash" | "merge";
+    message: string | undefined;
+  }>;
   mergeCalls: Record<string, number>;
+  mergeStrategies: string[];
+  abortStrategies: string[];
   bumpHead(taskId: string): string;
   getHead(taskId: string): string | null;
 }
@@ -227,9 +235,15 @@ function makeFakeGit(
   const merges: string[] = [];
   const removed: string[] = [];
   const mergeCalls: Record<string, number> = {};
+  const mergeStrategies: string[] = [];
+  const abortStrategies: string[] = [];
+  const finalizeMergeCalls: Array<{
+    strategy: "squash" | "merge";
+    message: string | undefined;
+  }> = [];
   const heads = new Map<string, string>();
   let headCounter = 0;
-  let completeMergeCalls = 0;
+  let finalizeMergeCount = 0;
 
   const bumpHead = (taskId: string): string => {
     headCounter += 1;
@@ -273,27 +287,33 @@ function makeFakeGit(
       return "deadbeefcafe";
     },
 
-    async mergeTaskIntoMain(taskId: string) {
+    async getBranchShortSha(_branch: string) {
+      return "abcdef0";
+    },
+
+    async mergeTaskIntoMain(taskId: string, strategy: "squash" | "merge") {
       const n = (mergeCalls[taskId] ?? 0) + 1;
       mergeCalls[taskId] = n;
+      mergeStrategies.push(strategy);
       const first = opts.initialMergeResult?.[taskId];
       if (n === 1 && first) {
         return first;
       }
       merges.push(taskId);
-      return { ok: true, sha: "feedface" };
+      return { ok: true } as const;
     },
 
-    async completeMerge() {
-      completeMergeCalls++;
-      if (opts.completeMergeThrowsFirst && completeMergeCalls === 1) {
+    async finalizeMerge(strategy: "squash" | "merge", message?: string) {
+      finalizeMergeCount++;
+      finalizeMergeCalls.push({ strategy, message });
+      if (opts.finalizeMergeThrowsFirst && finalizeMergeCount === 1) {
         throw new Error("nothing staged");
       }
       return "aaaa1111";
     },
 
-    async abortMerge() {
-      /* no-op */
+    async abortMerge(strategy: "squash" | "merge") {
+      abortStrategies.push(strategy);
     },
 
     async scanForConflictMarkers(_relPaths: readonly string[]) {
@@ -308,9 +328,12 @@ function makeFakeGit(
     merges,
     removed,
     get completeMergeCalls() {
-      return completeMergeCalls;
+      return finalizeMergeCount;
     },
+    finalizeMergeCalls,
     mergeCalls,
+    mergeStrategies,
+    abortStrategies,
     bumpHead,
     getHead: (taskId: string) => heads.get(taskId) ?? null,
   };
@@ -439,6 +462,7 @@ test(
     assert.deepEqual(h.git.removed, ["A"]);
 
     const stagesSeen = h.agent.calls.map((c) => c.stage);
+    // merge-verify runs after the merge commit lands as a read-only audit.
     assert.deepEqual(stagesSeen, [
       "spec",
       "exec",
@@ -447,6 +471,7 @@ test(
       "code_review_ui_check",
       "documentation",
       "update-learning",
+      "merge-verify",
     ]);
 
     // No "commit" stage in the pipeline anymore.

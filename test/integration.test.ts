@@ -495,26 +495,31 @@ test(
         );
       }
 
-      // --- Git log: must show per-task merge commits on main ---------------
+      // --- Git log: default squash strategy collapses each task's per-stage
+      // commits into a single commit on main whose body references the
+      // worktree branch SHA. ---------------------------------------------
       const rootGit = simpleGit(root);
       const log = await rootGit.log();
-      const mergeCommits = log.all.filter(
-        (l) =>
-          l.message.includes("Merge branch") ||
-          l.message.startsWith("Merge"),
-      );
-      assert.ok(
-        mergeCommits.length >= 2,
-        `expected >=2 merge commits on main (--no-ff), got ${mergeCommits.length}`,
-      );
-      // Per-stage commits should appear (one per stage that wrote files).
+      for (const id of taskIds) {
+        const matches = log.all.filter((l) =>
+          (l.message + "\n" + (l.body ?? "")).includes(`flow/${id}`),
+        );
+        assert.equal(
+          matches.length,
+          1,
+          `expected exactly one squash commit referencing flow/${id} on main, got ${matches.length}`,
+        );
+      }
+      // Squash collapses per-stage commits, so the legacy "exec: fake stage
+      // commit" subject should NOT appear on main — those messages live in
+      // the (now-deleted) flow/<id> branch and the per-task session JSONL.
       const joined = log.all
         .map((l) => `${l.message}\n${l.body ?? ""}`)
         .join("\n---\n");
-      assert.match(
+      assert.doesNotMatch(
         joined,
         /exec: fake stage commit/,
-        "exec stage commit should appear in main's history",
+        "squash strategy should NOT propagate per-stage commits to main",
       );
 
       // And the generated files should be present on main post-merge.

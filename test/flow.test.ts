@@ -101,13 +101,16 @@ function makeFakeGit(root: string): FakeGitHandle {
     async commitAllInWorktree(_taskId: string, _message: CommitMessage) {
       return "deadbeef";
     },
-    async mergeTaskIntoMain() {
-      return { ok: true, sha: "feedface" };
+    async getBranchShortSha(_branch: string) {
+      return "abcdef0";
     },
-    async completeMerge() {
+    async mergeTaskIntoMain(_taskId: string, _strategy: "squash" | "merge") {
+      return { ok: true } as const;
+    },
+    async finalizeMerge(_strategy: "squash" | "merge", _message?: string) {
       return "aaaa";
     },
-    async abortMerge() {
+    async abortMerge(_strategy: "squash" | "merge") {
       /* no-op */
     },
   };

@@ -193,6 +193,13 @@ export async function composePrompt(
         `   echo '{"stage":"${args.stage}","status":"done"}' > ${stageSignalPath}`,
         '   (use `"status":"blocked","reason":"…"` instead if you cannot proceed).',
         `   progress.txt: ${progressPath}`,
+        "",
+        "If you complete the stage but want a human to audit a specific",
+        "decision before it ships, emit a single line on stdout in addition",
+        "to the stage signal:",
+        "   `FLOW_REVIEW_REQUESTED: <one-sentence reason>`",
+        "This surfaces a warn-level notification without halting the queue.",
+        "Reserve `FLOW_BLOCKED:` for cases where you cannot proceed at all.",
       ].join("\n"),
     );
   }
@@ -726,6 +733,7 @@ export class AgentRunner {
     const tokens = emptyTokens();
     let lastUpdateAt = 0;
     let blockedReason: string | null = null;
+    let reviewRequestedReason: string | null = null;
     let killed = false;
     let consecutiveRetries = 0;
     let stale = false;
@@ -896,9 +904,9 @@ export class AgentRunner {
 
         if (kind === "assistant_text") {
           const text = extractAssistantText(payload);
-          const match = /^FLOW_BLOCKED:\s*(.+)$/m.exec(text);
-          if (match && !blockedReason) {
-            blockedReason = match[1]!.trim();
+          const blocked = /^FLOW_BLOCKED:\s*(.+)$/m.exec(text);
+          if (blocked && !blockedReason) {
+            blockedReason = blocked[1]!.trim();
             const notification: Notification = {
               id: newId(),
               ...(args.taskId ? { taskId: args.taskId } : {}),
@@ -919,6 +927,28 @@ export class AgentRunner {
               /* ignore */
             }
             break;
+          }
+          // FLOW_REVIEW_REQUESTED is the "I did this but you should look"
+          // middle tier between auto-resolve and FLOW_BLOCKED. The session
+          // continues — the agent has already done useful work — but a
+          // warn-level notification surfaces the concern in the UI so a
+          // human can audit without halting the queue.
+          const review = /^FLOW_REVIEW_REQUESTED:\s*(.+)$/m.exec(text);
+          if (review && !reviewRequestedReason) {
+            reviewRequestedReason = review[1]!.trim();
+            const notification: Notification = {
+              id: newId(),
+              ...(args.taskId ? { taskId: args.taskId } : {}),
+              sessionId,
+              severity: "warn",
+              title: args.taskId
+                ? `Task ${args.taskId} review requested at ${args.stage}`
+                : `Session review requested at ${args.stage}`,
+              body: `Agent requested review: ${reviewRequestedReason}`,
+              createdAt: this.nowFn().toISOString(),
+              acknowledged: false,
+            };
+            this.eventBus.emit("notification", { notification });
           }
         }
 
@@ -996,6 +1026,15 @@ export class AgentRunner {
       session.status = "autocompacted";
     } else {
       session.status = "succeeded";
+    }
+
+    // Surface FLOW_REVIEW_REQUESTED to the scheduler so it can persist a
+    // warn-level notification (the in-stream notification above is real-time
+    // only — not stored). Recorded regardless of final status so a session
+    // that emitted the signal mid-stream and then errored still gets the
+    // audit flag.
+    if (reviewRequestedReason) {
+      session.reviewRequested = { reason: reviewRequestedReason };
     }
 
     // Post-run context probe — best-effort.
