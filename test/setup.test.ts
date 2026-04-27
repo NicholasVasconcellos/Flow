@@ -230,8 +230,8 @@ test("ensureTasksLoaded: no tasks.json → agent writes one, defs returned and s
 
   const tasksFile: TasksFile = {
     tasks: [
-      { id: "A", title: "Task A", description: "Do A", contextFiles: [], requires: [] },
-      { id: "B", title: "Task B", description: "Do B", contextFiles: [], requires: ["A"] },
+      { id: "A", title: "Task A", description: "Do A", contextFiles: [], requires: [], hasUI: false, hasSpec: true, hasCodeReview: true },
+      { id: "B", title: "Task B", description: "Do B", contextFiles: [], requires: ["A"], hasUI: false, hasSpec: true, hasCodeReview: true },
     ],
   };
 
@@ -271,7 +271,7 @@ test("ensureTasksLoaded: existing valid tasks.json skips agent and returns defs"
   await scaffoldFlowDir(paths, ASSETS_DIR);
 
   const tasksFile: TasksFile = {
-    tasks: [{ id: "X", title: "X", description: "", contextFiles: [], requires: [] }],
+    tasks: [{ id: "X", title: "X", description: "", contextFiles: [], requires: [], hasUI: false, hasSpec: true, hasCodeReview: true }],
   };
   await fs.writeFile(paths.tasksJson, JSON.stringify(tasksFile), "utf8");
 
@@ -294,7 +294,10 @@ test("ensureTasksLoaded: existing valid tasks.json skips agent and returns defs"
   assert.equal(calls.length, 0, "agent should not run when tasks.json already exists");
 });
 
-test("ensureTasksLoaded: hasDocs=false skips setup session", async () => {
+test("ensureTasksLoaded: hasDocs=false still runs setup (gatekeeper)", async () => {
+  // Setup is the environment gatekeeper and runs unconditionally;
+  // `hasDocs=false` only suppresses the per-task `documentation` stage,
+  // not setup itself.
   const root = await mkTmp();
   const paths = new Paths(root);
   await scaffoldFlowDir(paths, ASSETS_DIR);
@@ -304,7 +307,7 @@ test("ensureTasksLoaded: hasDocs=false skips setup session", async () => {
   await state.load();
 
   const tasksFile: TasksFile = {
-    tasks: [{ id: "A", title: "A", description: "", contextFiles: [], requires: [] }],
+    tasks: [{ id: "A", title: "A", description: "", contextFiles: [], requires: [], hasUI: false, hasSpec: true, hasCodeReview: true }],
   };
   const { agent, calls } = makeFakeAgent({ tasksToWrite: tasksFile, paths });
   const { git } = makeFakeGit();
@@ -319,8 +322,9 @@ test("ensureTasksLoaded: hasDocs=false skips setup session", async () => {
     eventBus: new EventBus(),
   });
 
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]!.skillName, "get-tasks");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0]!.skillName, "setup");
+  assert.equal(calls[1]!.skillName, "get-tasks");
 });
 
 // ---------------------------------------------------------------------------
@@ -334,8 +338,8 @@ test("ensureTasksLoaded: existing tasks.json with a cycle throws with CYCLE + em
 
   const cycle: TasksFile = {
     tasks: [
-      { id: "A", title: "A", description: "", contextFiles: [], requires: ["B"] },
-      { id: "B", title: "B", description: "", contextFiles: [], requires: ["A"] },
+      { id: "A", title: "A", description: "", contextFiles: [], requires: ["B"], hasUI: false, hasSpec: true, hasCodeReview: true },
+      { id: "B", title: "B", description: "", contextFiles: [], requires: ["A"], hasUI: false, hasSpec: true, hasCodeReview: true },
     ],
   };
   await fs.writeFile(paths.tasksJson, JSON.stringify(cycle), "utf8");

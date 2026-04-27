@@ -12,14 +12,16 @@ async function mkTmp(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), "flow-"));
 }
 
+const TASK_DEFAULTS = { hasUI: false, hasSpec: true, hasCodeReview: true } as const;
+
 function defA(): TaskDef {
-  return { id: "A", title: "A", description: "task a", contextFiles: [], requires: [] };
+  return { id: "A", title: "A", description: "task a", contextFiles: [], requires: [], ...TASK_DEFAULTS };
 }
 function defB(requires: string[] = ["A"]): TaskDef {
-  return { id: "B", title: "B", description: "task b", contextFiles: [], requires };
+  return { id: "B", title: "B", description: "task b", contextFiles: [], requires, ...TASK_DEFAULTS };
 }
 function defC(requires: string[] = ["B"]): TaskDef {
-  return { id: "C", title: "C", description: "task c", contextFiles: [], requires };
+  return { id: "C", title: "C", description: "task c", contextFiles: [], requires, ...TASK_DEFAULTS };
 }
 
 test("empty load works and saves without error", async () => {
@@ -197,6 +199,7 @@ test("upsertTask / removeTask basic semantics", async () => {
     description: "",
     contextFiles: [],
     requires: [],
+    ...TASK_DEFAULTS,
     status: "pending",
     stage: "spec",
     retries: 0,

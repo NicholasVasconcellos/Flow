@@ -66,6 +66,19 @@ export const TaskDefSchema = z.object({
   description: z.string(),
   contextFiles: z.array(z.string()).default([]),
   requires: z.array(z.string()).default([]),
+  /** Whether the task has acceptance criteria requiring visual confirmation
+   *  or UI interaction. When false, the harness skips both `exec_ui_check`
+   *  and `code_review_ui_check`. Older tasks.json files without this field
+   *  parse with the conservative default of `false`. */
+  hasUI: z.boolean().default(false),
+  /** Whether the task is complex enough to benefit from a separate
+   *  spec-author agent writing acceptance tests before implementation.
+   *  When false, the harness skips the `spec` stage. Default `true` —
+   *  simple tasks must be explicitly marked simple. */
+  hasSpec: z.boolean().default(true),
+  /** Whether the task warrants a post-implementation code-review pass.
+   *  When false, the harness skips `code_review`. Default `true`. */
+  hasCodeReview: z.boolean().default(true),
 });
 export type TaskDef = z.infer<typeof TaskDefSchema>;
 

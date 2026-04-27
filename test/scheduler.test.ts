@@ -39,6 +39,9 @@ function mkTaskDef(
     description: `desc ${id}`,
     contextFiles: [],
     requires: [],
+    hasUI: false,
+    hasSpec: true,
+    hasCodeReview: true,
     ...overrides,
   };
 }
@@ -428,7 +431,9 @@ test(
   "happy path: 1 task reaches merged with ordered stage transitions (no separate commit stage)",
   { timeout: 10000 },
   async () => {
-    const h = await makeHarness({ taskDefs: [mkTaskDef("A")] });
+    // Enable hasUI so the full canonical pipeline runs (UI-check stages
+    // are the ones gated by per-task flags).
+    const h = await makeHarness({ taskDefs: [mkTaskDef("A", { hasUI: true })] });
 
     const result = await h.scheduler.runTask("A");
     assert.equal(result.status, "merged");
@@ -798,7 +803,7 @@ test(
   { timeout: 10000 },
   async () => {
     const h = await makeHarness({
-      taskDefs: [mkTaskDef("A")],
+      taskDefs: [mkTaskDef("A", { hasUI: true })],
       config: { hasDocs: false },
     });
 

@@ -70,8 +70,13 @@ Fix everything found above. Make the minimum change necessary to fix each issue.
 
 If any changed file is a UI component, page, stylesheet, or frontend route handler, run browser tests.
 
-- For web: use the Playwright MCP to navigate to the affected pages and verify the UI renders correctly and the interactions work.
-- For mobile: use the iOS/Android simulator to verify.
+Pick the tool that `.flow/setup-report.md` lists as verified for the
+relevant surface (the report points to a global skill at
+`~/.claude/skills/<tool>/` or a project-level skill at
+`.claude/skills/<tool>/`). Load that skill and follow its tips. Do not
+hardcode a specific MCP — the verified tool may differ between
+projects. If the report doesn't list a verified tool for the surface,
+log it under `issues/<short-kebab-name>.md` and skip the UI portion.
 
 If a browser test fails, fix the implementation and re-run both unit and browser tests.
 

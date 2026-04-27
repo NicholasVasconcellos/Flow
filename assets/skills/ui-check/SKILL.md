@@ -8,60 +8,62 @@ description: Verify UI changes on the right surface (web, iOS, or other desktop 
 Verify the task's UI changes on the appropriate surface and route findings to
 the right channel. Observational only — never edit application code.
 
-## Step 0 — Pick the surface
+## Step 0 — Pick the surface and the tool
 
 Read `.flow/tasks/<taskId>/summary.md` and look at the files changed in this
 worktree. Detect which surface the task targets:
 
-| Surface | How to detect | Tool to use |
-| --- | --- | --- |
-| **Web** | `package.json` includes `react`/`vue`/`svelte`/`next`/`vite`, or changed files include `*.html`, `*.jsx`, `*.tsx`, `*.css`, `*.vue`, `*.svelte` | `claude-in-chrome` MCP (`mcp__claude-in-chrome__*`). Fall back to Playwright MCP only if claude-in-chrome is unavailable. |
-| **iOS** | Repo contains `*.xcodeproj` / `*.xcworkspace`, `Package.swift`, or `Podfile`; changed files include `*.swift` / `*.m` / `*.mm` | The global `ios-simulator-skill` at `~/.claude/skills/ios-simulator-skill/`. Invoke its scripts via Bash. |
-| **Other desktop app** (Godot, Unity, native) | Engine markers like `project.godot`, `Assets/` + `ProjectSettings/`, or other engine-specific layouts | A dedicated MCP server that should have been wired up during scaffold (e.g. `godot-mcp`). If the right MCP is **not** available, do not improvise — log a Flow harness issue (Step 3-A) and stop the affected interactions. |
-| **No UI surface** | Backend, library, infra, or pure config changes only | Append `No UI surface; skipped.` to `summary.md` under a `## UI check` heading and stop. Do not launch any tool. |
+| Surface | How to detect |
+| --- | --- |
+| **Web** | `package.json` includes `react`/`vue`/`svelte`/`next`/`vite`, or changed files include `*.html`, `*.jsx`, `*.tsx`, `*.css`, `*.vue`, `*.svelte` |
+| **iOS** | Repo contains `*.xcodeproj` / `*.xcworkspace`, `Package.swift`, or `Podfile`; changed files include `*.swift` / `*.m` / `*.mm` |
+| **Other desktop app** (Godot, Unity, native) | Engine markers like `project.godot`, `Assets/` + `ProjectSettings/`, or other engine-specific layouts |
+| **No UI surface** | Backend, library, infra, or pure config changes only |
+
+If the surface is **No UI surface**, append `No UI surface; skipped.`
+to `summary.md` under a `## UI check` heading and stop. Do not launch
+any tool.
+
+Otherwise, **read `.flow/setup-report.md`** and pick the tool the
+project's setup verified for this surface. The report lists every
+verified tool with a path to its authoritative skill — either a global
+skill at `~/.claude/skills/<tool>/` or a project-level skill at
+`<projectRoot>/.claude/skills/<tool>/`. Load that skill and follow its
+tips and entry points.
+
+Do not hardcode tool names — the verified tool may differ between
+projects (claude-in-chrome, Playwright, Godot MCP, the iOS simulator
+skill, or anything else). If `.flow/setup-report.md` lists no verified
+tool for the detected surface, treat it as a harness gap (Step 3-A)
+and stop the affected interactions.
 
 ## Step 1 — Start the app
 
-- **Web:** start the dev server using the command in the README or
-  `package.json` scripts (commonly `npm run dev`). If you cannot start a
-  server in this environment, note it in `summary.md` and stop.
-- **iOS:** in order:
-  1. `bash ~/.claude/skills/ios-simulator-skill/scripts/sim_health_check.sh`
-  2. `python ~/.claude/skills/ios-simulator-skill/scripts/build_and_test.py --project <path> --json`
-  3. `python ~/.claude/skills/ios-simulator-skill/scripts/app_launcher.py --launch <bundle-id>`
-- **Other desktop app:** boot the app via the engine's MCP (e.g. a
-  `godot-mcp` `run_project` tool). If the MCP itself errors before the app
-  starts, that's a harness gap — see Step 3-A.
+Use the verified tool's skill (loaded in Step 0) to launch the app for
+the detected surface. Web typically means a dev server (`npm run dev`
+or the README's command); iOS / other desktop apps boot through their
+respective tooling. If you cannot start the app in this environment,
+note it in `summary.md` and stop.
+
+If the verified tool itself errors before the app starts, that's a
+harness gap — see Step 3-A.
 
 ## Step 2 — Exercise the affected screens
 
-For each route/screen/view the task touches:
+For each route/screen/view the task touches, use the verified tool's
+skill to:
 
-**Web (claude-in-chrome):** load tools via ToolSearch first
-(`select:mcp__claude-in-chrome__tabs_context_mcp` etc.), then
-`tabs_context_mcp` → `tabs_create_mcp` → `navigate` → exercise the
-primary interaction the task added or modified (click, type, submit) →
-`read_console_messages` (filter by relevant pattern) →
-`read_network_requests` for 4xx/5xx on requests the change touches →
-screenshot to `.flow/tasks/<taskId>/screenshots/<slug>.png`.
+1. Navigate to or open the screen.
+2. Exercise the primary interaction the task added or modified (click,
+   type, submit, tap).
+3. Capture the relevant signals — console output, network requests
+   (4xx/5xx on requests the change touches), crash logs, error events.
+4. Save evidence (screenshots, accessibility-tree dumps, log excerpts)
+   under `.flow/tasks/<taskId>/screenshots/`.
 
-**iOS:** prefer the accessibility tree over screenshots — it costs ~10–50
-tokens vs. 1,600–6,300 for a screenshot. Per screen:
-
-1. `python .../screen_mapper.py` — structured element list
-2. `python .../navigator.py --find-text/--find-type/--find-id ... --tap` (or
-   `--enter-text "..."`) for the touched interaction
-3. `python .../log_monitor.py --severity error --duration 5` after the
-   interaction to catch crashes
-4. `python .../app_state_capture.py` (or screenshot via the same script)
-   only when you need visual evidence — a flagged regression, a visual
-   diff, or a bug report attachment. Save under
-   `.flow/tasks/<taskId>/screenshots/`.
-
-**Other desktop app:** use the engine MCP's `*_screenshot` /
-`*_navigate` / `*_evaluate` (or equivalents). Capture evidence under
-`.flow/tasks/<taskId>/screenshots/`. Read the engine's log/console
-output if the MCP exposes it.
+Prefer cheap structured signals (DOM/console reads on web, accessibility
+trees on iOS) over screenshots — capture pixels only as evidence for a
+flagged regression, a visual diff, or a bug-report attachment.
 
 Do not just load a view — always exercise the primary interaction the
 task added or modified.

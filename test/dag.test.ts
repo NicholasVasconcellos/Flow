@@ -11,6 +11,9 @@ function def(id: string, requires: string[] = []): TaskDef {
     description: "",
     contextFiles: [],
     requires,
+    hasUI: false,
+    hasSpec: true,
+    hasCodeReview: true,
   };
 }
 

@@ -111,6 +111,9 @@ export class StateStore {
           description: def.description,
           contextFiles: def.contextFiles,
           requires: def.requires,
+          hasUI: def.hasUI,
+          hasSpec: def.hasSpec,
+          hasCodeReview: def.hasCodeReview,
           status: "pending",
           stage: "spec",
           retries: 0,
@@ -131,6 +134,9 @@ export class StateStore {
         description: def.description,
         contextFiles: def.contextFiles,
         requires: def.requires,
+        hasUI: def.hasUI,
+        hasSpec: def.hasSpec,
+        hasCodeReview: def.hasCodeReview,
         updatedAt: now,
       };
 
@@ -138,7 +144,10 @@ export class StateStore {
         existing.title !== merged.title ||
         existing.description !== merged.description ||
         !arraysEqual(existing.contextFiles, merged.contextFiles) ||
-        !arraysEqual(existing.requires, merged.requires);
+        !arraysEqual(existing.requires, merged.requires) ||
+        existing.hasUI !== merged.hasUI ||
+        existing.hasSpec !== merged.hasSpec ||
+        existing.hasCodeReview !== merged.hasCodeReview;
 
       next.push(merged);
       if (changed) updated.push(merged);

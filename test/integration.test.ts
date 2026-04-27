@@ -25,6 +25,7 @@ import type {
   Session,
   SessionEvent,
   State,
+  TaskDef,
   TaskRuntime,
   TasksFile,
 } from "../src/types.js";
@@ -94,7 +95,7 @@ async function createFixture(
     await fs.writeFile(paths.configJson, JSON.stringify(merged, null, 2), "utf8");
   }
 
-  const tasks =
+  const tasks: TaskDef[] =
     opts.tasks ??
     [
       {
@@ -103,6 +104,9 @@ async function createFixture(
         description: "Add feature A",
         contextFiles: ["src/app.ts"],
         requires: [],
+        hasUI: false,
+        hasSpec: true,
+        hasCodeReview: true,
       },
       {
         id: "B",
@@ -110,6 +114,9 @@ async function createFixture(
         description: "Add feature B which depends on A",
         contextFiles: ["src/app.ts"],
         requires: ["A"],
+        hasUI: false,
+        hasSpec: true,
+        hasCodeReview: true,
       },
     ];
 
@@ -844,6 +851,9 @@ test(
             description: "spec fails once",
             contextFiles: [],
             requires: [],
+            hasUI: false,
+            hasSpec: true,
+            hasCodeReview: true,
           },
         ],
       });
@@ -948,6 +958,9 @@ test(
             description: "spec fails, no retry",
             contextFiles: [],
             requires: [],
+            hasUI: false,
+            hasSpec: true,
+            hasCodeReview: true,
           },
         ],
       });
@@ -1043,6 +1056,9 @@ test(
           description: "FLOW_BLOCKED at code_review",
           contextFiles: [],
           requires: [],
+          hasUI: false,
+          hasSpec: true,
+          hasCodeReview: true,
         },
       ],
     });

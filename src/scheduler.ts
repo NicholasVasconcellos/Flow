@@ -43,7 +43,7 @@ export type AgentStage =
   | "documentation"
   | "update-learning";
 
-/** Full pipeline stage list (including synthetic done/merged markers). */
+/** Canonical stage list before per-task filtering. */
 export function stagesFor(config: Config): AgentStage[] {
   const stages: AgentStage[] = [
     "spec",
@@ -55,6 +55,22 @@ export function stagesFor(config: Config): AgentStage[] {
   if (config.hasDocs !== false) stages.push("documentation");
   stages.push("update-learning");
   return stages;
+}
+
+/** Per-task stage list. Filters the canonical list based on the task's
+ *  feature flags so simple tasks skip stages they don't need:
+ *  - `hasSpec=false` drops `spec`
+ *  - `hasUI=false` drops both UI-check stages
+ *  - `hasCodeReview=false` drops `code_review`
+ *  Filter preserves order, so `stages.indexOf(resumeStage)` continues to
+ *  work for paused/resumed tasks. */
+export function stagesForTask(config: Config, task: TaskDef): AgentStage[] {
+  return stagesFor(config).filter((s) => {
+    if (s === "spec" && task.hasSpec === false) return false;
+    if ((s === "exec_ui_check" || s === "code_review_ui_check") && task.hasUI === false) return false;
+    if (s === "code_review" && task.hasCodeReview === false) return false;
+    return true;
+  });
 }
 
 export function stageSkill(stage: AgentStage): string {
@@ -114,6 +130,9 @@ function taskDefView(task: TaskRuntime): TaskDef {
     description: task.description,
     contextFiles: task.contextFiles,
     requires: task.requires,
+    hasUI: task.hasUI,
+    hasSpec: task.hasSpec,
+    hasCodeReview: task.hasCodeReview,
   };
 }
 
@@ -374,12 +393,12 @@ export class Scheduler {
     taskId: string,
     handle: TaskHandle,
   ): Promise<TaskRuntime> {
-    const stages = stagesFor(this.config);
-
     const task0 = this.requireTask(taskId);
     if (!task0.startedAt) {
       task0.startedAt = nowIso();
     }
+
+    const stages = stagesForTask(this.config, task0);
 
     const resumeStage: TaskStage = task0.stage ?? "spec";
     let startIndex = stages.indexOf(resumeStage as AgentStage);

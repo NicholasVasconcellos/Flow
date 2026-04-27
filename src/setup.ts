@@ -159,16 +159,26 @@ export async function initProject(paths: Paths, opts: InitOpts): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Run the `setup` skill at project level. Skipped if `config.hasDocs`
- * is false. Project-level sessions carry `taskId = null`.
+ * Run the `setup` skill at project level. Always runs — setup is the
+ * environment gatekeeper and must verify MCPs/services/credentials before
+ * any task work begins. (`config.hasDocs` only suppresses the per-task
+ * `documentation` stage; it does not gate setup.) Project-level sessions
+ * carry `taskId = null`.
+ *
+ * `plan.md` is auto-injected as a context file when present so setup can
+ * extract the project's declared tooling. Setup tolerates the plan being
+ * absent (`resolveProjectStatus` already prevents the orchestrator from
+ * invoking setup in that case, but the lookup is permissive here so a
+ * direct `runSetupSession` call doesn't blow up).
  */
 export async function runSetupSession(deps: SetupDeps): Promise<void> {
-  if (deps.config.hasDocs === false) return;
+  const lookup = await findPlan(deps.paths.projectRoot);
   await deps.agent.spawnAgent({
     taskId: null,
     stage: "setup",
     skillName: "setup",
     worktreePath: deps.paths.projectRoot,
+    contextFiles: lookup.path ? [lookup.path] : undefined,
   });
 }
 

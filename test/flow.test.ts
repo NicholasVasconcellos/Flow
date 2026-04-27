@@ -134,8 +134,8 @@ test(
     // Write tasks.json so createFlow can sync it into state.
     const tasksFile: TasksFile = {
       tasks: [
-        { id: "A", title: "Task A", description: "Do A", contextFiles: [], requires: [] },
-        { id: "B", title: "Task B", description: "Do B", contextFiles: [], requires: ["A"] },
+        { id: "A", title: "Task A", description: "Do A", contextFiles: [], requires: [], hasUI: false, hasSpec: true, hasCodeReview: true },
+        { id: "B", title: "Task B", description: "Do B", contextFiles: [], requires: ["A"], hasUI: false, hasSpec: true, hasCodeReview: true },
       ],
     };
     await fs.writeFile(paths.tasksJson, JSON.stringify(tasksFile), "utf8");
@@ -198,6 +198,9 @@ test("replaySession streams a session's JSONL back", { timeout: 10000 }, async (
         description: "Replay test",
         contextFiles: [],
         requires: [],
+        hasUI: false,
+        hasSpec: true,
+        hasCodeReview: true,
       },
     ],
   };
@@ -314,8 +317,8 @@ test("getNextTask + getReadyTasks pick oldest ready task", { timeout: 10000 }, a
 
   const tasksFile: TasksFile = {
     tasks: [
-      { id: "A", title: "A", description: "", contextFiles: [], requires: [] },
-      { id: "B", title: "B", description: "", contextFiles: [], requires: [] },
+      { id: "A", title: "A", description: "", contextFiles: [], requires: [], hasUI: false, hasSpec: true, hasCodeReview: true },
+      { id: "B", title: "B", description: "", contextFiles: [], requires: [], hasUI: false, hasSpec: true, hasCodeReview: true },
     ],
   };
   await fs.writeFile(paths.tasksJson, JSON.stringify(tasksFile), "utf8");

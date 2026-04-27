@@ -135,6 +135,9 @@ test("composePrompt references skill via @path and includes task + context files
     description: "Creates a new widget component",
     contextFiles: [],
     requires: [],
+    hasUI: false,
+    hasSpec: true,
+    hasCodeReview: true,
   };
 
   const prompt = await composePrompt(
@@ -265,6 +268,9 @@ test("spawnAgent happy path: emits events, writes JSONL, computes cost", async (
       description: "d",
       contextFiles: [],
       requires: [],
+      hasUI: false,
+      hasSpec: true,
+      hasCodeReview: true,
     },
   });
 
