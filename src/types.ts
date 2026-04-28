@@ -53,9 +53,11 @@ export const StageConfigSchema = z.object({
    *  event before the session is killed and marked failed. Catches GUI-modal
    *  hangs the api_retry-counter watchdog can't see. */
   stallTimeoutMs: z.number().int().positive().optional(),
-  /** If the agent issues the same `(tool, command)` Bash invocation this many
-   *  times in one session, kill it and surface a non-retryable
-   *  `looped_on_blocked_tool` error. */
+  /** If the agent re-issues the same Bash command this many times back-to-back
+   *  with no successful (non-empty, non-error) intervening tool_result, kill
+   *  the session and surface a non-retryable `looped_on_blocked_tool:` error.
+   *  An interleaved different tool call or a good intervening result resets
+   *  the streak. */
   repeatToolCallCap: z.number().int().positive().optional(),
 });
 export type StageConfig = z.infer<typeof StageConfigSchema>;
@@ -246,9 +248,10 @@ export const ConfigSchema = z.object({
    *  before a session is killed and marked failed. Defaults to 3 minutes.
    *  Per-stage `stallTimeoutMs` overrides this value when set. */
   stallTimeoutMs: z.number().int().positive().default(180_000),
-  /** If the agent re-issues the same `(tool, command)` Bash invocation this
-   *  many times in one session, the session is killed with a non-retryable
-   *  `looped_on_blocked_tool:` error. Defaults to 3. */
+  /** If the agent re-issues the same Bash command this many times back-to-back
+   *  with no successful intervening tool_result, the session is killed with a
+   *  non-retryable `looped_on_blocked_tool:` error. An interleaved different
+   *  tool or a good intervening result resets the streak. Defaults to 3. */
   repeatToolCallCap: z.number().int().positive().default(3),
   hasDocs: z.boolean().default(true),
   defaults: z.object({

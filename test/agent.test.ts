@@ -752,3 +752,215 @@ test("stall without rate_limit_event leaves transientError unset", async () => {
   assert.match(session.error ?? "", /^Stall:/);
   assert.equal(session.transientError, undefined);
 });
+
+// ---------------------------------------------------------------------------
+// E2 watchdog — consecutive-repeat cap with outcome awareness
+// ---------------------------------------------------------------------------
+
+function bashUseLine(cmd: string, id = "tu"): string {
+  return JSON.stringify({
+    type: "assistant",
+    message: {
+      content: [{ type: "tool_use", id, name: "Bash", input: { command: cmd } }],
+    },
+  });
+}
+
+function toolResultLine(opts: {
+  id?: string;
+  content: string;
+  isError?: boolean;
+}): string {
+  const block: Record<string, unknown> = {
+    type: "tool_result",
+    tool_use_id: opts.id ?? "tu",
+    content: opts.content,
+  };
+  if (opts.isError) block["is_error"] = true;
+  return JSON.stringify({
+    type: "user",
+    message: { content: [block] },
+  });
+}
+
+function nonBashUseLine(name: string, id = "tu-other"): string {
+  return JSON.stringify({
+    type: "assistant",
+    message: {
+      content: [{ type: "tool_use", id, name, input: {} }],
+    },
+  });
+}
+
+test("repeat cap: identical Bash with good intervening results does NOT fire", async () => {
+  const root = await mkTmp();
+  const spawnerHandle = makeFakeSpawner();
+  const { runner, paths } = makeRunner(root, spawnerHandle);
+  await writeSkill(paths, "exec", "skill");
+
+  spawnerHandle.queue.push({
+    stdout: [
+      JSON.stringify({ type: "system", subtype: "init" }),
+      bashUseLine("git status", "a1"),
+      toolResultLine({ id: "a1", content: "On branch main\n" }),
+      bashUseLine("git status", "a2"),
+      toolResultLine({ id: "a2", content: "On branch main\n" }),
+      bashUseLine("git status", "a3"),
+      toolResultLine({ id: "a3", content: "On branch main\n" }),
+    ],
+    exitCode: 0,
+  });
+  spawnerHandle.queue.push({ stdout: [], exitCode: 0 });
+
+  const session = await runner.spawnAgent({
+    taskId: "T-repeat-1",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  assert.equal(session.status, "succeeded", `error: ${session.error}`);
+  assert.doesNotMatch(session.error ?? "", /looped_on_blocked_tool/);
+});
+
+test("repeat cap: same Bash interleaved with a different tool does NOT fire", async () => {
+  const root = await mkTmp();
+  const spawnerHandle = makeFakeSpawner();
+  const { runner, paths } = makeRunner(root, spawnerHandle);
+  await writeSkill(paths, "exec", "skill");
+
+  spawnerHandle.queue.push({
+    stdout: [
+      JSON.stringify({ type: "system", subtype: "init" }),
+      bashUseLine("grep -r FooService src/", "b1"),
+      nonBashUseLine("Read", "r1"),
+      bashUseLine("grep -r FooService src/", "b2"),
+      nonBashUseLine("Read", "r2"),
+      bashUseLine("grep -r FooService src/", "b3"),
+    ],
+    exitCode: 0,
+  });
+  spawnerHandle.queue.push({ stdout: [], exitCode: 0 });
+
+  const session = await runner.spawnAgent({
+    taskId: "T-repeat-2",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  assert.equal(session.status, "succeeded", `error: ${session.error}`);
+  assert.doesNotMatch(session.error ?? "", /looped_on_blocked_tool/);
+});
+
+test("repeat cap: 3 consecutive identical Bash with no result DOES fire", async () => {
+  const root = await mkTmp();
+  const spawnerHandle = makeFakeSpawner();
+  const { runner, paths } = makeRunner(root, spawnerHandle);
+  await writeSkill(paths, "exec", "skill");
+
+  spawnerHandle.queue.push({
+    stdout: [
+      JSON.stringify({ type: "system", subtype: "init" }),
+      bashUseLine("npm test", "c1"),
+      bashUseLine("npm test", "c2"),
+      bashUseLine("npm test", "c3"),
+    ],
+    exitCode: 0,
+  });
+
+  const session = await runner.spawnAgent({
+    taskId: "T-repeat-3",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  assert.equal(session.status, "failed");
+  assert.match(session.error ?? "", /^looped_on_blocked_tool:/);
+  assert.match(session.error ?? "", /npm test/);
+});
+
+test("repeat cap: 3 consecutive identical Bash with is_error results DOES fire", async () => {
+  const root = await mkTmp();
+  const spawnerHandle = makeFakeSpawner();
+  const { runner, paths } = makeRunner(root, spawnerHandle);
+  await writeSkill(paths, "exec", "skill");
+
+  spawnerHandle.queue.push({
+    stdout: [
+      JSON.stringify({ type: "system", subtype: "init" }),
+      bashUseLine("flaky-cmd", "d1"),
+      toolResultLine({ id: "d1", content: "boom: exit 1", isError: true }),
+      bashUseLine("flaky-cmd", "d2"),
+      toolResultLine({ id: "d2", content: "boom: exit 1", isError: true }),
+      bashUseLine("flaky-cmd", "d3"),
+      toolResultLine({ id: "d3", content: "boom: exit 1", isError: true }),
+    ],
+    exitCode: 0,
+  });
+
+  const session = await runner.spawnAgent({
+    taskId: "T-repeat-4",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  assert.equal(session.status, "failed");
+  assert.match(session.error ?? "", /^looped_on_blocked_tool:/);
+  assert.match(session.error ?? "", /flaky-cmd/);
+});
+
+test("repeat cap: tool_result + next tool_use bundled in one user payload still resets", async () => {
+  const root = await mkTmp();
+  const spawnerHandle = makeFakeSpawner();
+  const { runner, paths } = makeRunner(root, spawnerHandle);
+  await writeSkill(paths, "exec", "skill");
+
+  // Mixed shape: one user payload carries both the result for the previous
+  // tool_use and the next tool_use of the same command. The watchdog must
+  // observe the result before classifying the new tool_use, or rule B fails
+  // and the cap fires on healthy iterative work.
+  const mixedPayload = (prevId: string, nextId: string): string =>
+    JSON.stringify({
+      type: "user",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: prevId,
+            content: "ok\n",
+          },
+          {
+            type: "tool_use",
+            id: nextId,
+            name: "Bash",
+            input: { command: "npm test" },
+          },
+        ],
+      },
+    });
+
+  spawnerHandle.queue.push({
+    stdout: [
+      JSON.stringify({ type: "system", subtype: "init" }),
+      bashUseLine("npm test", "e1"),
+      mixedPayload("e1", "e2"),
+      mixedPayload("e2", "e3"),
+      toolResultLine({ id: "e3", content: "ok\n" }),
+    ],
+    exitCode: 0,
+  });
+  spawnerHandle.queue.push({ stdout: [], exitCode: 0 });
+
+  const session = await runner.spawnAgent({
+    taskId: "T-repeat-5",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  assert.equal(session.status, "succeeded", `error: ${session.error}`);
+  assert.doesNotMatch(session.error ?? "", /looped_on_blocked_tool/);
+});

@@ -416,38 +416,64 @@ export function isLoopedOnBlockedTool(err: string | undefined): boolean {
   return !!err && err.trimStart().startsWith("looped_on_blocked_tool:");
 }
 
-/** Best-effort: returns true if the payload carries a non-empty `tool_result`
- *  block. Used by the wall-clock stall watchdog so that a hung child tool
- *  (which never produces output) is not treated as progress. */
-function hasNonEmptyToolResult(payload: unknown): boolean {
+function isNonEmptyToolResultContent(content: unknown): boolean {
+  if (typeof content === "string") return content.trim().length > 0;
+  if (Array.isArray(content)) {
+    return content.some((c) => {
+      if (!c || typeof c !== "object") return false;
+      const cc = c as Record<string, unknown>;
+      if (typeof cc["text"] === "string") {
+        return (cc["text"] as string).trim().length > 0;
+      }
+      return Object.keys(cc).length > 0;
+    });
+  }
+  return false;
+}
+
+function someToolResultBlock(
+  payload: unknown,
+  predicate: (block: Record<string, unknown>) => boolean,
+): boolean {
   if (!payload || typeof payload !== "object") return false;
   const obj = payload as Record<string, unknown>;
-  const isNonEmpty = (block: unknown): boolean => {
+  const matches = (block: unknown): boolean => {
     if (!block || typeof block !== "object") return false;
     const b = block as Record<string, unknown>;
     if (b["type"] !== "tool_result") return false;
-    const content = b["content"];
-    if (typeof content === "string") return content.trim().length > 0;
-    if (Array.isArray(content)) {
-      return content.some((c) => {
-        if (!c || typeof c !== "object") return false;
-        const cc = c as Record<string, unknown>;
-        if (typeof cc["text"] === "string") {
-          return (cc["text"] as string).trim().length > 0;
-        }
-        return Object.keys(cc).length > 0;
-      });
-    }
-    return false;
+    return predicate(b);
   };
   const message = obj["message"];
   if (message && typeof message === "object") {
     const c = (message as Record<string, unknown>)["content"];
-    if (Array.isArray(c) && c.some(isNonEmpty)) return true;
+    if (Array.isArray(c) && c.some(matches)) return true;
   }
   const c = obj["content"];
-  if (Array.isArray(c) && c.some(isNonEmpty)) return true;
+  if (Array.isArray(c) && c.some(matches)) return true;
   return false;
+}
+
+/** Best-effort: returns true if the payload carries a non-empty `tool_result`
+ *  block. Used by the wall-clock stall watchdog so that a hung child tool
+ *  (which never produces output) is not treated as progress. Deliberately
+ *  permissive — error content (stack traces, etc.) still counts as bytes
+ *  flowing, which is what the stall detector cares about. */
+function hasNonEmptyToolResult(payload: unknown): boolean {
+  return someToolResultBlock(payload, (b) =>
+    isNonEmptyToolResultContent(b["content"]),
+  );
+}
+
+/** Stricter sibling of `hasNonEmptyToolResult`: also rejects blocks marked
+ *  `is_error: true`. Used by the consecutive-repeat watchdog (rule B): a
+ *  previous run that produced meaningful, non-error output is treated as a
+ *  successful result, so re-running the same command is a fresh legitimate
+ *  call rather than a stuck loop. */
+function hasGoodToolResult(payload: unknown): boolean {
+  return someToolResultBlock(
+    payload,
+    (b) => b["is_error"] !== true && isNonEmptyToolResultContent(b["content"]),
+  );
 }
 
 function hasToolResultBlock(payload: unknown): boolean {
@@ -749,8 +775,13 @@ export class AgentRunner {
     let sawRateLimitEvent = false;
     let loopedToolKey: string | null = null;
     let loopedToolCount = 0;
-    /** Hash of `(toolName, command)` -> count, scoped to this session. */
-    const bashCallCounts = new Map<string, number>();
+    // E2 watchdog state — see the rewrite at the tool_use loop below for the
+    // full rule. We only need to track the most recent tool key, the current
+    // consecutive-streak count for that key, and whether the previous run of
+    // that key produced a non-empty, non-error tool_result.
+    let lastToolKey: string | null = null;
+    let lastToolCount = 0;
+    let lastResultWasGood = false;
 
     const armStallTimer = (): void => {
       if (stallTimer) clearTimeout(stallTimer);
@@ -862,19 +893,47 @@ export class AgentRunner {
           bumpProgress();
         }
 
-        // E2: same-Bash-command repeat cap. Inspect every tool_use block in
-        // this payload — they may arrive standalone or embedded in an
-        // assistant content array.
+        // E2: consecutive-repeat cap, outcome-aware. The cap fires only when
+        // the same Bash command is re-issued back-to-back AND no intervening
+        // run produced a non-empty, non-error tool_result. This catches a
+        // genuinely stuck loop (agent retries the same failing command with
+        // nothing changing) without punishing healthy iterative work like
+        // re-running `git status` after `git add`, `npm test` after a fix,
+        // or polling commands that return useful output.
+        //
+        // Rules:
+        //   A. Different tool_use key resets the streak (any non-Bash tool
+        //      counts as "different" too — otherwise interleaved Read/Edit
+        //      calls don't break a Bash:X streak).
+        //   B. Same key but the prior run produced a good (non-empty,
+        //      non-error) tool_result resets the streak.
+        //   Else: increment, and if the streak hits the cap, kill — but
+        //   only Bash blocks may trip the cap (matches the prior contract).
+        //
+        // Order matters: process tool_results from this payload first, so
+        // rule B sees the latest outcome before any tool_use in the same
+        // payload is classified.
+        if (lastToolKey !== null && hasGoodToolResult(payload)) {
+          lastResultWasGood = true;
+        }
+
         let cappedThisIter = false;
         for (const block of iterToolUseBlocks(payload)) {
           const cmd = extractBashCommandFromBlock(block);
-          if (cmd === null) continue;
-          const key = `${block.name}:${cmd}`;
-          const next = (bashCallCounts.get(key) ?? 0) + 1;
-          bashCallCounts.set(key, next);
-          if (next >= repeatToolCallCap) {
+          const isBash = cmd !== null;
+          const key = isBash ? `Bash:${cmd}` : `non-bash:${block.name}`;
+
+          if (key !== lastToolKey || lastResultWasGood) {
+            lastToolCount = 1;
+          } else {
+            lastToolCount += 1;
+          }
+          lastToolKey = key;
+          lastResultWasGood = false;
+
+          if (isBash && lastToolCount >= repeatToolCallCap) {
             loopedToolKey = cmd;
-            loopedToolCount = next;
+            loopedToolCount = lastToolCount;
             killed = true;
             cappedThisIter = true;
             try {
@@ -991,7 +1050,7 @@ export class AgentRunner {
         loopedToolKey.length > 80
           ? `${loopedToolKey.slice(0, 80)}…`
           : loopedToolKey;
-      session.error = `looped_on_blocked_tool: agent re-issued the same Bash command ${loopedToolCount} times: ${truncated}`;
+      session.error = `looped_on_blocked_tool: agent re-issued the same Bash command ${loopedToolCount} times consecutively with no successful intervening result: ${truncated}`;
     } else if (stalledByWatchdog) {
       // E1: wall-clock stall. Treated as a normal stage failure (consumes a
       // retry slot) — except when the session also saw a rate_limit_event,
