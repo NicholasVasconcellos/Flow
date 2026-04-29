@@ -21,6 +21,33 @@ You will receive:
 
 Read all three before writing any code.
 
+## Step 0 — UI Review remediation (when present)
+
+If your context files include a `round-<N>-issues.md` (path shown
+under `# Context files` in your prompt), the previous `exec_ui_check`
+pass found problems and the scheduler routed back to you to fix them.
+
+When this file is present, treat it as your **primary objective for
+this run**:
+
+1. Read every issue in the round file. For each, note the
+   `Acceptance:` line — that is your concrete pass condition.
+2. Re-read the task title and description. The original acceptance
+   criteria still bind. If a UI-Review issue's acceptance conflicts
+   with the original task acceptance (e.g., the round file demands
+   behavior the spec forbids), do **not** guess — emit
+   `FLOW_BLOCKED: round-<N> issue conflicts with task acceptance — <one-sentence summary>`
+   and stop.
+3. Draft a short plan covering every issue, then implement. Issues
+   with shared root causes can be addressed by a single change; issues
+   touching unrelated surfaces can use the subagent pattern (Step 3).
+4. After implementing, run unit + UI tests as usual. Every issue's
+   `Acceptance:` line must hold before you commit.
+
+Do not edit the round file — `exec_ui_check` will write a fresh
+`round-<N+1>-issues.md` next pass. If a previously-listed issue is
+still present, it will reappear there.
+
 ## Step 1 — Read the tests
 
 Open every test file for this task. Read each test case. Understand exactly what the tests expect: inputs, outputs, side effects, error conditions. The tests are the source of truth for what "done" means.
@@ -103,9 +130,9 @@ If browser tests reveal a bug, fix the implementation and re-run both unit and b
 ## Progress notes
 
 Read `progress.txt` (provided via `@progress.txt` in your prompt) at the
-start so you see what spec already decided. Append one line when you finish:
+start so you see what spec already decided. Append a note when you finish:
 the implementation plan that worked, plus any non-obvious decision a later
-stage should know about. Keep it terse.
+stage should know about. Be extremely concise.
 
 ## Termination
 

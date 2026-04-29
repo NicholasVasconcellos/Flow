@@ -101,6 +101,7 @@ export type ConfigPatch = {
   maxConsecutiveApiRetries?: Config["maxConsecutiveApiRetries"];
   stallTimeoutMs?: Config["stallTimeoutMs"];
   repeatToolCallCap?: Config["repeatToolCallCap"];
+  maxUIReviewIterations?: Config["maxUIReviewIterations"];
   hasDocs?: Config["hasDocs"];
   defaults?: Partial<Config["defaults"]>;
   stages?: Partial<Config["stages"]>;

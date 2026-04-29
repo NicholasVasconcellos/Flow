@@ -104,6 +104,11 @@ export const TaskRuntimeSchema = TaskDefSchema.extend({
    *  `retries` so a flaky API stream doesn't burn the agent-logic retry
    *  budget. Resets when a stage advances. */
   transientRetries: z.number().int().nonnegative().default(0),
+  /** Per-task counter of UI-Review rounds completed. Increments each time
+   *  `exec_ui_check` runs and finds non-empty issues that send the task back
+   *  to `exec`. Compared against `Config.maxUIReviewIterations` to decide
+   *  whether to loop again or block the task for human review. */
+  uiReviewRound: z.number().int().nonnegative().default(0),
   worktreePath: z.string().optional(),
   branchName: z.string().optional(),
   currentSessionId: z.string().optional(),
@@ -253,6 +258,12 @@ export const ConfigSchema = z.object({
    *  non-retryable `looped_on_blocked_tool:` error. An interleaved different
    *  tool or a good intervening result resets the streak. Defaults to 3. */
   repeatToolCallCap: z.number().int().positive().default(3),
+  /** Maximum number of UI-Review rounds before the loop gives up and marks
+   *  the task `blocked` for human review. Each round = one `exec_ui_check`
+   *  pass that found at least one issue and sent the task back to `exec`.
+   *  A "clean" round (zero issues) exits the loop and advances the pipeline.
+   *  Defaults to 3. */
+  maxUIReviewIterations: z.number().int().positive().default(3),
   hasDocs: z.boolean().default(true),
   defaults: z.object({
     model: z.string().default("sonnet"),

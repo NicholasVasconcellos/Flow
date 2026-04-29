@@ -204,6 +204,7 @@ test("upsertTask / removeTask basic semantics", async () => {
     stage: "spec",
     retries: 0,
     transientRetries: 0,
+    uiReviewRound: 0,
     sessionIds: [],
     createdAt: now,
     updatedAt: now,

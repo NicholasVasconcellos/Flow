@@ -70,12 +70,12 @@ Fix everything found above. Make the minimum change necessary to fix each issue.
 
 If any changed file is a UI component, page, stylesheet, or frontend route handler, run browser tests.
 
-Pick the tool that `.flow/setup-report.md` lists as verified for the
-relevant surface (the report points to a global skill at
+Pick the tool that `.flow/SetupNotes.md` lists as installed for the
+relevant surface (SetupNotes points to a global skill at
 `~/.claude/skills/<tool>/` or a project-level skill at
 `.claude/skills/<tool>/`). Load that skill and follow its tips. Do not
-hardcode a specific MCP — the verified tool may differ between
-projects. If the report doesn't list a verified tool for the surface,
+hardcode a specific MCP — the installed tool may differ between
+projects. If SetupNotes doesn't list a tool for the surface,
 log it under `issues/<short-kebab-name>.md` and skip the UI portion.
 
 If a browser test fails, fix the implementation and re-run both unit and browser tests.
@@ -108,9 +108,9 @@ Output a plain-text report with these sections:
 ## Progress notes
 
 Read `progress.txt` (provided via `@progress.txt` in your prompt) at the
-start to see what spec/exec already decided. Append one line when you
-finish: the verdict plus any cleanup you applied that a later stage should
-know about. One line, not a journal.
+start to see what spec/exec already decided. Append a note when you finish:
+the verdict plus any cleanup you applied that a later stage should know
+about. Be extremely concise.
 
 ## Termination
 

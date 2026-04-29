@@ -99,6 +99,24 @@ export class Paths {
     return path.join(this.taskDir(taskId), "learnings-draft.md");
   }
 
+  taskIssuesDir(taskId: string): string {
+    return path.join(this.taskDir(taskId), "issues");
+  }
+
+  taskRoundIssues(taskId: string, round: number): string {
+    return path.join(this.taskIssuesDir(taskId), `round-${round}-issues.md`);
+  }
+
+  /** Project-level setup notes — replaces the legacy `setup-report.md`. */
+  get setupNotes(): string {
+    return path.join(this.flowDir, "SetupNotes.md");
+  }
+
+  /** Project-level instructions injected into every non-setup session. */
+  get instructionsMd(): string {
+    return path.join(this.projectRoot, "instructions.md");
+  }
+
   /** Captures stdout+stderr of the pre-merge verify command for the task.
    *  Surfaced in the pause-notification body when the gate fails. */
   taskVerifyLog(taskId: string): string {

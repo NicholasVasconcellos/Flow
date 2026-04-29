@@ -90,9 +90,9 @@ Report: list each test file created and confirm the failure mode is "implementat
 ## Progress notes
 
 Read `progress.txt` (mentioned via `@progress.txt` in your prompt) at the
-start. Append a one-line note when you finish that captures anything a later
-stage needs to know — file paths added, frameworks chosen, blockers worked
-around. Do not turn it into a journal; one line is the target.
+start. Append a note when you finish that captures anything a later stage
+needs to know — file paths added, frameworks chosen, blockers worked around.
+Be extremely concise.
 
 ## Termination
 

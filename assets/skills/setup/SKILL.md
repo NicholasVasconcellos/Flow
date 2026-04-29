@@ -1,41 +1,112 @@
 ---
 name: setup
 description: >
-  Gatekeeper for project readiness. Reads the plan, verifies every declared
-  MCP / service / credential / library end-to-end, refreshes CODEBASE.md,
-  derives per-tool skills, and hard-blocks if anything is missing.
+  Prepare the project bed: install / configure every tool the plan declares,
+  fetch library docs, write `.env` placeholders + retrieval guides, write
+  `.gitignore`, `Map.md`, `instructions.md`, and `.flow/SetupNotes.md`.
+  Pure preparation — no runtime tool testing.
   Trigger on: /setup
 disable-model-invocation: true
 ---
 
 # setup
 
-You are the environment gatekeeper. Nothing else proceeds until you confirm
-the project's tooling is present and working.
-
+You prepare the project so every downstream stage has the tools, docs, env
+file, and orientation files it needs. **You do not test or verify tools at
+runtime.** End-to-end verification is the first task emitted by `get-tasks`.
 
 ## Inputs
 
 `plan.md` is loaded into your prompt as a context file. Read it first and
 extract:
 
-- **MCPs** the project intends to use (any name the author wrote — UI
-  drivers, database connectors, engine integrations, etc.).
-- **Services** the project depends on (databases, auth, storage,
-  email/SMS, payments, analytics, third-party APIs).
-- **Libraries / frameworks** the project uses or will use.
-- **CLI tools** the project requires.
+- **MCPs** the project intends to use
+- **Plugins** the project depends on
+- **Skills** referenced in the plan
+- **CLI tools** the project requires
+- **External libraries / services** the project uses (databases, auth,
+  storage, payments, third-party APIs, frameworks, language libraries)
 
-## Step 1 — Refresh `CODEBASE.md`
+**Do not skip any tool the plan declares**, especially anything used for
+UI Review or interactive testing (Playwright, claude-in-chrome, simulator
+skills, screenshot tooling, engine drivers). Downstream UI-Review
+iterations fail open if the tool is missing.
 
-Create `CODEBASE.md` at the project root if missing. If present, walk
-the actual filesystem and update it so it reflects the current tree.
+## Step 1 — Install / configure tools
 
-`CODEBASE.md` must be:
-- **Hierarchical** — mirrors the actual directory structure
-- **Annotated** — one-line description per file/dir
-- **Scannable** — structured lists, no prose paragraphs
-- **Accurate** — based on the real filesystem
+For each tool extracted in Inputs:
+
+| Kind | Action |
+| --- | --- |
+| **MCP** | Add an entry to `.mcp.json` with the correct server / args. Do **not** call the MCP. |
+| **Plugin** | Install in the agreed location. |
+| **Skill** | Confirm a skill is reachable. Prefer the global skill at `~/.claude/skills/<tool>/SKILL.md`. If none exists, write a short project-level skill at `<projectRoot>/.claude/skills/<tool>/SKILL.md` with the basic entry points the plan implies. Never edit global skills. |
+| **CLI** | Confirm `which <tool>` resolves. If absent, install it (Homebrew, package manager, or the project's documented method). |
+| **Library** | Add to the project manifest (`package.json`, `requirements.txt`, `go.mod`, `Cargo.toml`, etc.) and run the install command for the language. |
+
+If a tool cannot be installed locally and no offline workaround exists,
+record the gap in `.flow/SetupNotes.md` (Step 6) and continue. Do not
+emit `FLOW_BLOCKED` for an installable-but-not-yet-installed tool —
+write the install command into SetupNotes so the human or the next
+session can complete it.
+
+## Step 2 — Fetch library documentation
+
+For every library/framework, use Context7 to fetch documentation and
+write it under `docs/<lib>/...` at the project root. One folder per
+library, grouped by use case, current syntax, and the references the
+downstream agents will need. Do not duplicate the library's full
+website — fetch what the plan's features actually use.
+
+## Step 3 — Write `.env`
+
+For every service that requires a human-issued credential, write
+`<projectRoot>/.env` with placeholder values and a numbered retrieval
+guide as inline comments. Example:
+
+```
+# STRIPE
+# 1. Visit https://dashboard.stripe.com/apikeys
+# 2. Click "Reveal test key" under Standard keys
+# 3. Copy the key starting with `sk_test_...` into the value below
+STRIPE_SECRET_KEY=
+
+# RESEND
+# 1. Sign in at https://resend.com
+# 2. API Keys → Create API Key → name it for this project
+# 3. Copy the key starting with `re_...` into the value below
+RESEND_API_KEY=
+```
+
+Also print the same retrieval steps in your final stdout message so the
+human can pick them up without opening `.env`.
+
+**Do not block the session waiting for keys.** Flow blocks at run time
+when a missing key is actually hit; setup's job is to leave the
+placeholders and the instructions in place.
+
+If a `.env` already exists with real values, do not overwrite — only
+add missing keys with their retrieval guide.
+
+## Step 4 — Write `.gitignore`
+
+Tailor `<projectRoot>/.gitignore` to the project's stack. Cover:
+
+- Build artifacts (`dist/`, `build/`, `target/`, language-specific)
+- Dependency directories (`node_modules/`, `vendor/`, `.venv/`)
+- Environment files (`.env`, `.env.*` — except `.env.example` if used)
+- Editor and OS files (`.DS_Store`, `.idea/`, `.vscode/` if not committed)
+- Local caches and logs (`*.log`, `.cache/`, `.next/`, `.turbo/`)
+- Anything project-specific the plan mentions
+
+If `.gitignore` already exists, merge — do not clobber existing rules.
+
+## Step 5 — Write `Map.md`
+
+Create `<projectRoot>/Map.md` mirroring the actual filesystem.
+**Hierarchical, annotated, scannable, accurate.** No prose paragraphs.
+One line per entry. Walk the real filesystem to populate it; do not
+invent files.
 
 Format:
 
@@ -53,183 +124,110 @@ tests/
     auth.test.ts      — Auth route integration tests
 ```
 
-## Step 2 — Verify services
+Skip `.git/`, `node_modules/`, `dist/`, `.flow/`, and other ignored
+directories. Top-level only at first; sub-trees that don't yet exist
+get added by later sessions when they appear.
 
-For every service declared in `plan.md`:
+## Step 6 — Write `instructions.md`
 
-1. Check whether the required environment variable(s) are set (read
-   `.env`, `.env.local`, `.env.example`, or the project's equivalent).
-2. If the env var is set, send a minimal verification request (a ping,
-   list call, health check — whatever the SDK supports) to confirm the
-   credential is valid and the service is reachable.
-3. Classify the result as `connected`, `missing`, or `unreachable`.
+Create `<projectRoot>/instructions.md`. **Lean.** Only what every agent
+needs to know — no architecture essays, no per-module deep-dives.
 
-**`env-set` is not the same as `connected`.** A service is only
-`connected` if a verification call actually succeeded.
+Include:
 
-## Step 3 — Verify MCPs / Plugins / Skills
+1. **Coding conventions** — language, formatter, lint rules,
+   indentation, naming, import style, error-handling style. Pull these
+   from the plan, the project manifest, and any existing config files
+   (`.eslintrc`, `pyproject.toml`, etc.).
+2. **Library list** — one line per library: `<name> — <what it's used
+   for in this project>`.
+3. **Hard rules every agent follows:**
+   - "To find a file or content, consult `Map.md` first, then read only
+     the targeted file. Do not grep or scan random directories."
+   - "Before using any library, consult `docs/<lib>/`."
+4. **Project-specific gotchas** declared in the plan (env-var gotchas,
+   hidden invariants, naming conventions specific to this codebase).
 
-For every MCP, plugin, skill declared in `plan.md`:
+Keep the whole file short — every agent loads it on every spawn.
 
-1. Confirm the MCP is currently loaded in the environment.
-2. Run a representative call that proves it actually works:
-   - **UI MCPs** (browser, simulator, engine drivers) must successfully
-     launch the target surface and capture evidence (navigate +
-     screenshot, or equivalent).
-   - **Other MCPs** run a representative read call appropriate to their
-     function (list, query, fetch, status).
-3. Record evidence (response excerpt, timing, screenshot path) in the
-   setup report.
+## Step 7 — Write `.flow/SetupNotes.md`
 
-## Step 4 — Derive per-tool skills
-
-For each verified MCP / tool, downstream agents need actionable usage
-instructions. **Always check the global skills directory first:**
-`~/.claude/skills/<tool>/SKILL.md`.
-
-| Global skill | Action |
-| --- | --- |
-| **Exists** | Do not duplicate at the project level. If verification surfaced an improvement (a quirk, flag, version constraint, or workaround the global skill doesn't mention), log it as a Flow issue at `issues/<tool>-skill-improvement.md` with severity, symptom, and suggested fix. The improvement gets manually promoted to the global skill in a separate session — **never edit the global skill directly from here**. |
-| **Missing** | Write a project-level skill at `<projectRoot>/.claude/skills/<tool>/SKILL.md` with the verified usage tips (entry points, common flags, viewport defaults, auth-state behavior, etc.). On subsequent setup runs, edit this project-level skill **directly** when new issues surface — don't open a Flow issue, just update the skill in place. |
-
-In `.flow/setup-report.md`, list each tool with the path to its
-authoritative skill so downstream agents (`ui-check`, `review`) can find
-it.
-
-## Step 5 — Verify CLI tools and project skills
-
-Enumerate the CLI tools declared in `plan.md` (or implied by the
-project's package manifests) and capture versions via `which <tool>`
-and the appropriate version flag. Note skills already present in
-`<projectRoot>/.claude/skills/`.
-
-## Step 6 — Fetch library documentation
-
-For each library/framework declared in `plan.md` (or pinned in the
-project manifest — `package.json`, `go.mod`, `requirements.txt`,
-`Cargo.toml`, etc.):
-
-1. Confirm the installed version matches a current, widely-supported
-   release.
-2. Use Context7 to fetch documentation. Place it under
-   `docs/<lib>/...`, grouped by library and use case, with current
-   function syntax and references downstream agents will need.
-
-Flag any library that is more than one major version behind the current
-release, or that has a known security advisory.
-
-## Step 7 — Generate `.env.example`
-
-For every service detected in Step 2, write the exact environment
-variable name(s) the project needs into `.env.example`. For each missing
-key, include step-by-step acquisition instructions inline as comments.
-Example:
-
-```
-# Stripe — go to dashboard.stripe.com → Developers → API keys → copy
-# the test secret key starting with `sk_test_...`
-STRIPE_SECRET_KEY=
-
-# Resend — create an account at resend.com → API Keys → New API Key
-RESEND_API_KEY=
-```
-
-## Step 8 - Setup git ignore
-Write the git ignore based on the file structure and project context.
-
-
-## Step 8 — Write the setup report
-
-Output `.flow/setup-report.md` with these sections. Be specific — never
-write "configured" without saying what was verified.
+Output `.flow/SetupNotes.md` summarising what you installed and where
+things live. Downstream agents (especially the first `get-tasks` task,
+which verifies the pipeline end-to-end) read this file. Sections:
 
 ```markdown
-## Services
+## Tools installed
 
-[connected]   <name> — <env vars set>, <verification call> succeeded
-[missing]     <name> — <env vars> not set
-              Setup: <where to acquire credential, env var name>
-[unreachable] <name> — <env vars> set but <verification call> failed
-              Check: <likely cause>
+MCPs:        <name> — `.mcp.json` entry, skill at <path>
+Plugins:     <name> — installed at <path>
+Skills:      <name> — global at ~/.claude/skills/<name>/  OR  project at .claude/skills/<name>/
+CLIs:        <name> <version>, ...
 
 ## Libraries
 
-<name>          <version>    — current / behind / N major versions behind
-                               <concerns or "no concerns">
+<name> <version>  — purpose
 
-## Tools
+## Services with credentials
 
-MCPs:           <name1>, <name2>, ...
-Skills:         <name1>, <name2>, ...
-CLI:            git X.Y.Z, gh X.Y.Z, ...
-Missing:        <name> (<why required — install command>)
+<service>          env var(s): <name>           retrieval steps in `.env`
 
-## MCP verification
+## How to run the project locally
 
-<mcp-name>
-  Skill:    ~/.claude/skills/<tool>/SKILL.md  OR  .claude/skills/<tool>/SKILL.md
-  Verified: <call made, evidence — screenshot path, response excerpt, timing>
-  Notes:    <any quirks observed>
+<exact commands — install, dev server, build, test>
 
-## Recommendations
+## UI Review tooling
 
-<every missing or stale item with the specific install/setup command>
+Detected surfaces: <web | iOS | Android | desktop-engine | none>
+Tool to use:       <name>, skill at <path>
+Sample data:       <where realistic test inputs live, or "none yet — first task seeds them">
+
+## Gaps
+
+<anything you could not install + the install command for the human or
+the first task to run>
 ```
 
-Downstream skills (`ui-check`, `review`) read this file at runtime to
-discover which tools to use. The "MCP verification" section is the
-contract — every entry must point at a real skill path.
-
-## Step 9 — Block on missing required items
-
-If any required service are `missing` or `unreachable`,and you where not able to set them up here in this session, any required MCP
-failed verification, or any required CLI tool is absent, end with a
-single line:
-
-```
-FLOW_BLOCKED: <one-sentence reason>
-```
-
-Project status flips to `blocked`. The user fixes the gap and re-runs
-`/setup`. 
-
-**Preffer solvign issues yourself instead of blocking for user**
+The `UI Review tooling` and `How to run the project locally` blocks
+are mandatory — the first task that `get-tasks` emits will use them
+to drive end-to-end verification.
 
 ## Allowed write paths
 
-- `CODEBASE.md`
+- `Map.md`
+- `instructions.md`
 - `docs/...`
 - `.gitignore`
-- `.env.example`
-- `.flow/setup-report.md`
+- `.env`
+- `.mcp.json`
+- `.flow/SetupNotes.md`
 - `<projectRoot>/.claude/skills/<tool>/SKILL.md` — only when no global
   skill exists for that tool
-- `issues/<tool>-skill-improvement.md` — only when a global skill exists
-  and verification surfaced an improvement
+- Project manifest files (`package.json`, etc.) when adding library
+  declarations
 
 ## What NOT to do
 
-- Do not write any task implementation code.
-- Do not modify source files (only the allowed paths above).
-- Do not write to `~/.claude/skills/` (the global skills directory).
-  Improvements to global skills go through `issues/` for human review.
-- Do not skip the verification step for services — "env var is set" is
-  not the same as "service is connected."
-- Do not report a service or MCP as `connected` / `verified` if the
-  verification call failed or was not attempted.
-- Do not install missing tools or set up missing services — report them
-  in the recommendations and emit `FLOW_BLOCKED`.
-- Do not hardcode tool names in the report's structure — every entry is
-  derived from what `plan.md` declared.
+- Do not run any MCP or service ping/health-check call. Installation
+  presence is enough; runtime verification belongs to the first
+  `get-tasks` task.
+- Do not write `CODEBASE.md` (retired in favor of `Map.md` +
+  `instructions.md`).
+- Do not write `.env.example`. Use `.env` with placeholders.
+- Do not extract or write learnings — that's `update-learning`'s job.
+- Do not skip a UI / interactive-testing tool because it "looks
+  optional."
+- Do not edit `~/.claude/skills/` (the global skills directory).
+- Do not block the session waiting for human-issued credentials.
 
 ## Termination
 
-When the report is written, `CODEBASE.md` is current, `docs/` is
-populated, `.env.example` exists with all detected services, and every
-declared tool has been verified and skilled, **stop**.
+When `Map.md`, `instructions.md`, `.gitignore`, `.env`,
+`.flow/SetupNotes.md` exist, `docs/<lib>/` is populated for every
+declared library, every declared MCP/plugin/skill/CLI is installed and
+configured (or its install command is recorded in SetupNotes), **stop**.
 
-If anything is missing or unverifiable, output:
-
-```
-FLOW_BLOCKED: <one-sentence reason>
-```
+Reserve `FLOW_BLOCKED:` for the genuinely unrecoverable case — a
+required tool that cannot be installed in any way and has no human
+workaround. Most "missing key" or "missing tool" cases should leave a
+note in SetupNotes and proceed.

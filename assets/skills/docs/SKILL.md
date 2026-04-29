@@ -80,8 +80,8 @@ For each significant change, document:
 ## Progress notes
 
 Read `progress.txt` (provided via `@progress.txt` in your prompt) at the
-start. Append a one-line note when you finish that captures any docs file
-created or surface area that newly has documentation. Keep it terse.
+start. Append a note when you finish that captures any docs file created
+or surface area that newly has documentation. Be extremely concise.
 
 ## Termination
 

@@ -24,18 +24,11 @@ If the surface is **No UI surface**, append `No UI surface; skipped.`
 to `summary.md` under a `## UI check` heading and stop. Do not launch
 any tool.
 
-Otherwise, **read `.flow/setup-report.md`** and pick the tool the
-project's setup verified for this surface. The report lists every
-verified tool with a path to its authoritative skill — either a global
-skill at `~/.claude/skills/<tool>/` or a project-level skill at
-`<projectRoot>/.claude/skills/<tool>/`. Load that skill and follow its
-tips and entry points.
-
-Do not hardcode tool names — the verified tool may differ between
-projects (claude-in-chrome, Playwright, Godot MCP, the iOS simulator
-skill, or anything else). If `.flow/setup-report.md` lists no verified
-tool for the detected surface, treat it as a harness gap (Step 3-A)
-and stop the affected interactions.
+Otherwise, **read `.flow/SetupNotes.md`** and pick the tool the
+project's setup installed for this surface. SetupNotes lists every
+installed tool with a path to its authoritative skill
+if `.flow/SetupNotes.md` lists no installed
+tool for the detected surface, treat it as a harness gap (Step 3-A) and stop the affected interactions.
 
 ## Step 1 — Start the app
 
@@ -99,33 +92,69 @@ A harness gap on its own is not a blocker — keep going on the
 interactions you can verify and end with `status:"done"`. Only emit
 `status:"blocked"` if every interaction was unverifiable.
 
-### B. Project-side UI issues → `summary.md` punch-list
+### B. Project-side UI issues → `round-<N>-issues.md`
 
-Append a single, structured section to `summary.md`. The next stage's
-implementing agent gets `summary.md` auto-loaded into its prompt, so
-this is the channel that reaches them. Use this exact format so the
-table is easy to scan and consume:
+For the `exec_ui_check` stage, write a fresh round file at the path
+shown as `round issues file:` in your **Runtime paths** block. This is
+`.flow/tasks/<taskId>/issues/round-<N>-issues.md`, where `<N>` is the
+`ui-review round:` value also in your runtime paths.
+
+`code_review_ui_check` skips this step — it does not produce a round
+file. Append observations to `summary.md` instead, since by then the
+exec ↔ ui-check loop has already converged.
+
+The round file is a fresh snapshot every round — do not edit prior
+round files, do not carry forward statuses. If round (N+1) is run, the
+next ui-check pass writes a new file, and a previously-listed bug only
+re-appears if it's still observable.
+
+Use this exact format:
 
 ```markdown
-## UI check — Issues for implementing agent
+# UI Review — Round <N>
+**Task:** <taskId>
+**Date:** <ISO 8601 timestamp>
+**Surfaces tested:** <comma-separated list of routes / screens / views>
+**Tools used:** <comma-separated list of MCPs / CLIs you actually invoked>
+**Outcome:** <count> issues — <H> HIGH, <M> MED, <L> LOW
 
-| # | Surface | Severity | Description | Evidence |
-| - | ------- | -------- | ----------- | -------- |
-| 1 | /settings | HIGH | Save button disabled after first click, never re-enables | screenshots/settings-save.png; console: TypeError at app.js:412 |
-| 2 | LoginScreen | MED | Email field accepts whitespace-only input | screenshots/login-empty.png |
+| # | Severity | Surface | Summary |
+|---|----------|---------|---------|
+| 1 | HIGH | /login (mobile) | Sign-In button not tappable |
+| 2 | MED  | /signup        | Email field accepts whitespace-only input |
+
+---
+
+## Issue 1 — HIGH — /login (mobile)
+**Symptom:** Tapping "Sign In" registers nothing.
+**Repro:**
+1. Open /login in mobile viewport (≤ 768px).
+2. Tap "Sign In".
+3. No console error, no nav, no spinner.
+**Evidence:** screenshots/round-<N>/issue-1-mobile.png
+**Acceptance:** Button responds to tap on viewports ≤ 768px.
+**Suspected cause:** Overlay z-index conflict.
+
+## Issue 2 — MED — /signup
+...
 ```
 
-Then a one-line verdict immediately below the table:
+Required fields per issue: `Symptom`, `Repro`, `Evidence`,
+`Acceptance`. `Suspected cause` is optional.
 
-```
-**Verdict:** Needs fixes (see table above).
-```
+If you found **zero** issues, still write the round file with the
+header block and `**Outcome:** 0 issues` plus an empty table — the
+scheduler reads the file to decide whether to advance the pipeline or
+re-enter exec. A missing file with no issues is ambiguous; an
+explicitly-empty round file is unambiguous.
 
-…or `**Verdict:** Clean.` if the table is empty.
+Save evidence (screenshots, accessibility-tree dumps, log excerpts)
+under `.flow/tasks/<taskId>/screenshots/round-<N>/` so each round's
+artifacts are clearly grouped.
 
-Project-side issues never go to `issues/` — that directory is reserved
-for harness bugs. Harness bugs never go in the punch-list — the
-implementing agent can't fix Flow.
+Project-side issues never go to `issues/` at the Flow repo root — that
+directory is reserved for harness bugs. Harness bugs never go in the
+round file — the implementing agent can't fix Flow.
 
 ## Rules
 
@@ -141,17 +170,19 @@ implementing agent can't fix Flow.
 ## Progress notes
 
 Read `progress.txt` (mentioned via `@progress.txt` in your prompt) at
-the start. Append a one-line note when you finish: surface checked,
-verdict, and the count of issues in the punch-list (e.g.
-`ui-check: web — Needs fixes (3 issues); harness OK`).
+the start. Append a note when you finish: surface checked, round number,
+and the count of issues found (e.g.
+`ui-check: web round 2 — 3 issues (1 HIGH, 2 MED); harness OK`). Be
+extremely concise.
 
 ## Termination
 
 When every affected route/screen has been exercised, evidence is saved,
-the punch-list (or `Clean` verdict) is in `summary.md`, and any
-harness gap is filed under `issues/`, **stop**. Do not edit
-application code or pursue regressions yourself — that's the next
-stage's job.
+the round-N issues file is written (with at minimum the header block
+and outcome line, even when zero issues), and any harness gap is filed
+under `issues/`, **stop**. Do not edit application code or pursue
+regressions yourself — the scheduler will route exec back to address
+them if the file is non-empty.
 
 ## Learnings
 

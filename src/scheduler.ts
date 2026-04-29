@@ -154,6 +154,20 @@ async function readIfExists(filePath: string): Promise<string | null> {
   }
 }
 
+/** Count the open issues recorded in a `round-<N>-issues.md` file. Prefer
+ *  the explicit `**Outcome:** N issues` header line written by ui-check; if
+ *  that's absent, fall back to counting `## Issue ` H2 headings. Returns 0
+ *  for an empty/clean round so the loop can advance. */
+function countRoundIssues(body: string): number {
+  const outcome = /^\*\*Outcome:\*\*\s+(\d+)\s+issues?/im.exec(body);
+  if (outcome && outcome[1]) {
+    const n = Number.parseInt(outcome[1], 10);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  const headings = body.match(/^##\s+Issue\s+\d+/gm);
+  return headings ? headings.length : 0;
+}
+
 /** Deterministic squash commit message — one commit per task on main, with a
  *  footer pinning the worktree branch SHA so the per-stage history is still
  *  reachable via reflog or `.flow/tasks/<id>/sessions/`. */
@@ -339,6 +353,7 @@ export class Scheduler {
       task.status = "ready";
       task.retries = 0;
       task.transientRetries = 0;
+      task.uiReviewRound = 0;
       task.lastError = undefined;
       task.updatedAt = nowIso();
       this.state.upsertTask(task);
@@ -356,6 +371,7 @@ export class Scheduler {
     task.status = "running";
     task.retries = 0;
     task.transientRetries = 0;
+    task.uiReviewRound = 0;
     task.lastError = undefined;
     task.updatedAt = nowIso();
     this.state.upsertTask(task);
@@ -427,6 +443,27 @@ export class Scheduler {
         continue;
       }
       errorAddendum = "";
+
+      // UI-Review loop. After `exec_ui_check` finalizes successfully, read
+      // the round-N-issues.md the skill just wrote. If it lists open issues
+      // and the iteration cap hasn't been hit, route back to `exec` so it
+      // can address them; otherwise advance normally. Hitting the cap with
+      // open issues marks the task blocked for human review.
+      if (stage === "exec_ui_check") {
+        const decision = await this.evaluateUIReviewRound(taskId);
+        if (decision.kind === "blocked") {
+          return this.requireTask(taskId);
+        }
+        if (decision.kind === "loop") {
+          const execIdx = stages.indexOf("exec");
+          if (execIdx >= 0) {
+            // -1 because the for-loop will increment i on the next pass.
+            i = execIdx - 1;
+            continue;
+          }
+        }
+        // kind === "advance" — fall through to next stage normally.
+      }
     }
 
     if (handle.cancelled) {
@@ -471,6 +508,12 @@ export class Scheduler {
     task.status = "running";
     task.updatedAt = nowIso();
     if (!task.startedAt) task.startedAt = nowIso();
+    // Bump the UI-Review round counter on entry to `exec_ui_check` so the
+    // spawned skill can write its findings to round-<N>-issues.md and the
+    // post-stage decision logic knows which file to read.
+    if (stage === "exec_ui_check") {
+      task.uiReviewRound = (task.uiReviewRound ?? 0) + 1;
+    }
     this.state.upsertTask(task);
     await this.saveState();
     this.eventBus.emit("task.upsert", { task: { ...task } });
@@ -501,13 +544,26 @@ export class Scheduler {
       .filter((s) => s && s.trim())
       .join("\n\n---\n\n");
 
+    // When re-entering `exec` after a UI-Review round found issues, surface
+    // the most-recent round-N-issues.md so the agent has the remediation
+    // list as a context file (per exec/SKILL.md Step 0).
+    const stageContextFiles = [...task.contextFiles];
+    if (stage === "exec" && (task.uiReviewRound ?? 0) > 0) {
+      stageContextFiles.push(
+        this.paths.taskRoundIssues(taskId, task.uiReviewRound),
+      );
+    }
+
     const session = await this.agent.spawnAgent({
       taskId,
       stage,
       skillName: stageSkill(stage),
       worktreePath,
       task: taskDefView(task),
-      contextFiles: task.contextFiles,
+      contextFiles: stageContextFiles,
+      ...(stage === "exec_ui_check"
+        ? { uiReviewRound: task.uiReviewRound }
+        : {}),
       ...(extraPrompt ? { extraPrompt } : {}),
     });
 
@@ -617,6 +673,45 @@ export class Scheduler {
       ? `Stage signal "done" but no commit was made on the worktree branch (this stage requires a commit).`
       : `Stage finished without a stage signal and without committing.`;
     return await this.bumpRetryOrPause(taskId, stage, session.id, noProgressMsg);
+  }
+
+  /** Decide what to do after `exec_ui_check` finalizes: read the round-N
+   *  issues file the skill just wrote, count open issues, and route back to
+   *  `exec` if non-zero (within the iteration cap) or advance otherwise.
+   *  Hitting the cap with open issues marks the task blocked for human
+   *  review and skips downstream stages. A missing or empty round file
+   *  advances the pipeline — agents that forgot to write the file are
+   *  treated permissively rather than spuriously looping. */
+  private async evaluateUIReviewRound(
+    taskId: string,
+  ): Promise<{ kind: "advance" | "loop" | "blocked" }> {
+    const task = this.requireTask(taskId);
+    const round = task.uiReviewRound ?? 0;
+    if (round <= 0) return { kind: "advance" };
+
+    const roundFile = this.paths.taskRoundIssues(taskId, round);
+    const body = await readIfExists(roundFile);
+    if (body === null || !body.trim()) {
+      return { kind: "advance" };
+    }
+
+    const issueCount = countRoundIssues(body);
+    if (issueCount === 0) return { kind: "advance" };
+
+    const cap = this.config.maxUIReviewIterations;
+    if (round >= cap) {
+      const sessionId = task.currentSessionId ?? "";
+      const reason = `UI Review iterations exhausted: ${round} round(s) ran with ${issueCount} issue(s) still open in ${path.basename(roundFile)}. Human review required.`;
+      await this.markBlocked(
+        taskId,
+        "exec_ui_check",
+        sessionId,
+        `FLOW_BLOCKED: ${reason}`,
+      );
+      return { kind: "blocked" };
+    }
+
+    return { kind: "loop" };
   }
 
   /** Per-stage cleanup when the stage completes — clears the signal, resets

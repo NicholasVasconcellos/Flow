@@ -19,12 +19,62 @@ the task graph.
 Read all provided inputs before doing anything else:
 
 - `plan.md` — the project's plan or PRD
-- `CODEBASE.md` — the project map (already current)
+- `Map.md` — the project map (already current; mirrors the filesystem)
+- `instructions.md` — coding conventions and library-purpose summary
 - `docs/<lib>/...` — library documentation fetched during setup
-- `.flow/setup-report.md` — verified tools, services, and skills
+- `.flow/SetupNotes.md` — installed tools, services, libraries, and skill paths
 
 If any of these are missing, emit
 `FLOW_BLOCKED: setup output missing — re-run /setup` and stop.
+
+## Step 0 — Runtime verification mandate
+
+Setup installed and configured the tools but **did not test them**.
+Runtime verification is your responsibility, expressed as tasks the
+implementing agent runs end-to-end.
+
+### A. The first task you emit MUST be the pipeline-verification sentinel
+
+`tasks[0]` is fixed:
+
+```json
+{
+  "id": "verify-pipeline-end-to-end",
+  "title": "Verify UI-check pipeline end-to-end against SetupNotes",
+  "description": "Read .flow/SetupNotes.md. For every tool listed under \"UI Review tooling\" and \"Tools installed\", launch it against a sample surface (a placeholder route or a minimal scratch view if no real surface exists yet) and confirm: the tool starts, reaches the surface, captures a screenshot or accessibility tree, and writes evidence to .flow/tasks/<taskId>/screenshots/. Do the same for every CLI / library / service the plan declares: invoke each with realistic sample data that mimics real execution (real shapes, real edge cases — not minimal stubs) and confirm the observable outputs the plan expects. Acceptance: every tool, library, and service from SetupNotes is exercised end-to-end with passing evidence; failures are logged to issues/ as harness gaps. This task gates the whole pipeline — every later task assumes these tools work.",
+  "contextFiles": [".flow/SetupNotes.md", "instructions.md", "Map.md"],
+  "requires": [],
+  "hasUI": true,
+  "hasSpec": false,
+  "hasCodeReview": false
+}
+```
+
+This sentinel is verification, not feature work — `hasSpec: false`,
+`hasCodeReview: false`, `hasUI: true`.
+
+### B. Every other task that touches a tool must verify it end-to-end
+
+When a feature task uses an MCP, CLI, library, or service, its
+`description` must:
+
+1. Enumerate exactly which tools/libraries/services the task invokes.
+2. Specify **realistic** sample data (real shapes, real edge cases —
+   not minimal stubs).
+3. Spell out the observable output that proves success (the response
+   payload shape, the rendered DOM, the file written, the row inserted,
+   the screenshot evidence path).
+
+No mocking, no stubbing for tools the plan declares — those calls go
+through to the real tool. Stub only for upstream services the plan
+explicitly marks as "mocked in dev."
+
+### C. Make `tasks[0]` blocking for everything else
+
+Every other task in `requires` must transitively depend on
+`verify-pipeline-end-to-end` so the pipeline cannot ship feature work
+on broken tools. The simplest pattern: every task whose `requires` is
+otherwise empty lists `["verify-pipeline-end-to-end"]` instead.
 
 ## Step 1 — Decompose into tasks
 

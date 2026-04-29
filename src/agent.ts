@@ -39,6 +39,10 @@ export interface SpawnArgs {
   sessionId?: string;
   /** UI grouping ordinal — auto-computed from prior sessions if omitted. */
   ordinal?: number;
+  /** UI-Review round number (1-based) — supplied by the scheduler when
+   *  spawning `exec_ui_check`. Used to derive the round-N issues file path
+   *  injected into the prompt. */
+  uiReviewRound?: number;
 }
 
 /**
@@ -132,6 +136,19 @@ export async function composePrompt(
     if (hint) sections.push(hint);
   }
 
+  // Inject project-level `instructions.md` for every stage except setup
+  // (which authors the file). Bootstrap-safe: skip silently when the file
+  // doesn't exist yet so a fresh project's first setup run still works.
+  if (args.stage !== "setup") {
+    const instructionsPath = deps.paths.instructionsMd;
+    try {
+      await fs.access(instructionsPath);
+      sections.push(`# Project instructions\n@${instructionsPath}`);
+    } catch {
+      /* not created yet — first setup run hasn't completed */
+    }
+  }
+
   const task = args.task;
   if (task) {
     const title = (task.title ?? "").trim();
@@ -147,20 +164,28 @@ export async function composePrompt(
     const progressPath = deps.paths.taskProgressTxt(args.taskId);
     const stageSignalPath = deps.paths.taskStageSignal(args.taskId);
     const learningsDraftPath = deps.paths.taskLearningsDraft(args.taskId);
-    sections.push(
-      [
-        "# Runtime paths",
-        `cwd (worktree):    ${args.worktreePath}`,
-        `summary.md:        ${summaryPath}`,
-        `progress.txt:      ${progressPath}`,
-        `learnings-draft:   ${learningsDraftPath}`,
-        `screenshots:       ${screenshotsDir}`,
-        `stage signal:      ${stageSignalPath}`,
-        "Edit only files inside cwd (except `learnings-draft.md` and the",
-        "stage signal, which live outside the worktree). Wherever the skill",
-        `mentions \`<taskId>\`, substitute "${args.taskId}".`,
-      ].join("\n"),
+    const runtimeLines = [
+      "# Runtime paths",
+      `cwd (worktree):    ${args.worktreePath}`,
+      `summary.md:        ${summaryPath}`,
+      `progress.txt:      ${progressPath}`,
+      `learnings-draft:   ${learningsDraftPath}`,
+      `screenshots:       ${screenshotsDir}`,
+      `stage signal:      ${stageSignalPath}`,
+    ];
+    if (args.stage === "exec_ui_check" && typeof args.uiReviewRound === "number") {
+      const roundFile = deps.paths.taskRoundIssues(args.taskId, args.uiReviewRound);
+      runtimeLines.push(
+        `round issues file: ${roundFile}`,
+        `ui-review round:   ${args.uiReviewRound}`,
+      );
+    }
+    runtimeLines.push(
+      "Edit only files inside cwd (except `learnings-draft.md` and the",
+      "stage signal, which live outside the worktree). Wherever the skill",
+      `mentions \`<taskId>\`, substitute "${args.taskId}".`,
     );
+    sections.push(runtimeLines.join("\n"));
 
     // Surface progress.txt as a context file so each stage sees prior notes.
     sections.push(`# Progress notes\n@${progressPath}`);

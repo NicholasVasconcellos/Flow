@@ -118,6 +118,7 @@ export class StateStore {
           stage: "spec",
           retries: 0,
           transientRetries: 0,
+          uiReviewRound: 0,
           sessionIds: [],
           createdAt: now,
           updatedAt: now,
