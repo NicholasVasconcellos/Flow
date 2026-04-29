@@ -5,6 +5,7 @@ dist/
 .env
 .env.local
 .flow/worktrees/
+.worktrees/
 .flow/sessions/*.jsonl
 .flow/tasks/*/sessions/*.jsonl
 .flow/tasks/*/screenshots/
