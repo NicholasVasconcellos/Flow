@@ -309,16 +309,27 @@ export class Scheduler {
   }
 
   /** Flip every task currently in `status="running"` to `paused` with the
-   *  given message as `lastError`. Used by the SIGINT shutdown path so
-   *  state.json reflects "interrupted" immediately rather than waiting for
-   *  the next startup's `recoverStaleTasks()` sweep. The status guard mirrors
-   *  `recoverStaleTasks` and prevents stomping a task that paused itself
-   *  just before the signal arrived. */
+   *  given message as `lastError`, then persist `state.json` once. Used by
+   *  the SIGINT shutdown path so state reflects "interrupted" immediately
+   *  rather than waiting for the next startup's `recoverStaleTasks()` sweep.
+   *  Batched single-write keeps shutdown bounded under the 2s grace even at
+   *  high concurrency. The status guard mirrors `recoverStaleTasks` and
+   *  prevents stomping a task that paused itself just before the signal. */
   async pauseAllRunning(message: string): Promise<void> {
+    const updated: TaskRuntime[] = [];
     for (const taskId of this.runningTaskIds()) {
       const task = this.state.getTask(taskId);
       if (!task || task.status !== "running") continue;
-      await this.pauseWithMessage(taskId, message);
+      task.status = "paused";
+      task.lastError = { stage: task.stage, message, at: nowIso() };
+      task.updatedAt = nowIso();
+      this.state.upsertTask(task);
+      updated.push({ ...task });
+    }
+    if (updated.length === 0) return;
+    await this.saveState();
+    for (const task of updated) {
+      this.eventBus.emit("task.upsert", { task });
     }
   }
 

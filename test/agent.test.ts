@@ -1025,7 +1025,7 @@ test("repeat cap: tool_result + next tool_use bundled in one user payload still 
 // killAllLive — SIGINT shutdown helper
 // ---------------------------------------------------------------------------
 
-test("killAllLive sends the signal to every registered live proc", () => {
+test("killAllLive sends the signal to every registered live proc", async () => {
   const root = "/tmp/flow-killalllive-noop";
   const paths = new Paths(root);
   const bus = new EventBus();
@@ -1038,19 +1038,19 @@ test("killAllLive sends the signal to every registered live proc", () => {
     now: () => new Date(),
   });
 
-  function fakeProc(): { proc: SpawnedProcess; killed: () => NodeJS.Signals | undefined } {
-    let killSignal: NodeJS.Signals | undefined;
+  function fakeProc(): { proc: SpawnedProcess; signals: NodeJS.Signals[] } {
+    const signals: NodeJS.Signals[] = [];
     const proc: SpawnedProcess = {
       stdout: (async function* () {})(),
       stderr: (async function* () {})(),
       exit: new Promise<number>(() => {
-        /* never resolves; killAllLive must not await it */
+        /* never resolves; SIGKILL escalation will be exercised */
       }),
       kill(signal) {
-        killSignal = signal;
+        signals.push(signal ?? "SIGTERM");
       },
     };
-    return { proc, killed: () => killSignal };
+    return { proc, signals };
   }
 
   const a = fakeProc();
@@ -1061,13 +1061,81 @@ test("killAllLive sends the signal to every registered live proc", () => {
   liveProcs.add(a.proc);
   liveProcs.add(b.proc);
 
-  runner.killAllLive("SIGTERM");
+  await runner.killAllLive("SIGTERM", 0);
 
-  assert.equal(a.killed(), "SIGTERM");
-  assert.equal(b.killed(), "SIGTERM");
+  assert.equal(a.signals[0], "SIGTERM");
+  assert.equal(b.signals[0], "SIGTERM");
 });
 
-test("killAllLive swallows errors from individual proc.kill calls", () => {
+test("killAllLive escalates to SIGKILL for stragglers after the grace window", async () => {
+  const root = "/tmp/flow-killalllive-escalate";
+  const paths = new Paths(root);
+  const bus = new EventBus();
+  const handle = makeFakeSpawner();
+  const runner = new AgentRunner({
+    paths,
+    config: defaultConfig(),
+    eventBus: bus,
+    spawner: handle.spawner,
+    now: () => new Date(),
+  });
+
+  const signals: NodeJS.Signals[] = [];
+  const wedged: SpawnedProcess = {
+    stdout: (async function* () {})(),
+    stderr: (async function* () {})(),
+    exit: new Promise<number>(() => {
+      /* simulates a child that ignores SIGTERM */
+    }),
+    kill(signal) {
+      signals.push(signal ?? "SIGTERM");
+    },
+  };
+  const liveProcs = (
+    runner as unknown as { liveProcs: Set<SpawnedProcess> }
+  ).liveProcs;
+  liveProcs.add(wedged);
+
+  await runner.killAllLive("SIGTERM", 5);
+
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+});
+
+test("killAllLive does not SIGKILL procs that exit within the grace window", async () => {
+  const root = "/tmp/flow-killalllive-clean";
+  const paths = new Paths(root);
+  const bus = new EventBus();
+  const handle = makeFakeSpawner();
+  const runner = new AgentRunner({
+    paths,
+    config: defaultConfig(),
+    eventBus: bus,
+    spawner: handle.spawner,
+    now: () => new Date(),
+  });
+
+  const signals: NodeJS.Signals[] = [];
+  const clean: SpawnedProcess = {
+    stdout: (async function* () {})(),
+    stderr: (async function* () {})(),
+    exit: Promise.resolve(0),
+    kill(signal) {
+      signals.push(signal ?? "SIGTERM");
+    },
+  };
+  const liveProcs = (
+    runner as unknown as { liveProcs: Set<SpawnedProcess> }
+  ).liveProcs;
+  liveProcs.add(clean);
+  // Mirror the spawn-site .finally that auto-removes from liveProcs on exit.
+  void clean.exit.finally(() => liveProcs.delete(clean));
+
+  await runner.killAllLive("SIGTERM", 50);
+
+  assert.deepEqual(signals, ["SIGTERM"]);
+});
+
+test("killAllLive swallows errors from individual proc.kill calls", async () => {
   const root = "/tmp/flow-killalllive-swallow";
   const paths = new Paths(root);
   const bus = new EventBus();
@@ -1104,6 +1172,6 @@ test("killAllLive swallows errors from individual proc.kill calls", () => {
   liveProcs.add(throwing);
   liveProcs.add(surviving);
 
-  runner.killAllLive("SIGTERM");
+  await runner.killAllLive("SIGTERM", 0);
   assert.equal(secondKilled, true, "later procs must still be killed after a thrower");
 });

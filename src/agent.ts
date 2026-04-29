@@ -795,14 +795,37 @@ export class AgentRunner {
     return next;
   }
 
-  /** Send `signal` to every currently-live spawned process. The default
+  /** Send `signal` to every currently-live spawned process, then wait up
+   *  to `graceMs` for clean exit and SIGKILL any stragglers. The default
    *  spawner uses `detached: true` and group-kill, so a single SIGTERM here
    *  reaps each agent + its MCP grandchildren. Used by the SIGINT shutdown
    *  path; safe to call when nothing is live (no-op). */
-  killAllLive(signal: NodeJS.Signals = "SIGTERM"): void {
-    for (const proc of this.liveProcs) {
+  async killAllLive(
+    signal: NodeJS.Signals = "SIGTERM",
+    graceMs = 1500,
+  ): Promise<void> {
+    const procs = Array.from(this.liveProcs);
+    if (procs.length === 0) return;
+    for (const proc of procs) {
       try {
         proc.kill(signal);
+      } catch {
+        /* ignore — best-effort */
+      }
+    }
+    // Wait up to graceMs for clean exits, then escalate. Procs that exit
+    // cleanly are auto-removed from liveProcs by the spawn-site .finally,
+    // so anything still in the set after the race is a straggler.
+    await Promise.race([
+      Promise.allSettled(procs.map((p) => p.exit)),
+      new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, graceMs);
+        t.unref?.();
+      }),
+    ]);
+    for (const proc of this.liveProcs) {
+      try {
+        proc.kill("SIGKILL");
       } catch {
         /* ignore — best-effort */
       }

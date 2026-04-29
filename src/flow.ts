@@ -285,7 +285,7 @@ class FlowImpl implements Flow {
    *  resume won't double-spawn against an already-paused task. */
   async shutdown(message = "Cancelled by SIGINT"): Promise<void> {
     this.stop();
-    this.agent.killAllLive("SIGTERM");
+    await this.agent.killAllLive("SIGTERM");
     await this.scheduler.pauseAllRunning(message);
   }
 
