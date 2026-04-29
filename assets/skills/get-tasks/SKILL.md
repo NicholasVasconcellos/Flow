@@ -11,6 +11,23 @@ trust that the environment is verified, libraries are documented under
 `docs/`, and MCPs/services are reachable. Your only job is to produce
 the task graph.
 
+`tasks[0]` is fixed — emit it verbatim. Every other task must transitively
+depend on it (tasks that would otherwise have empty `requires` list
+`["verify-pipeline-end-to-end"]` instead):
+
+```json
+{
+  "id": "verify-pipeline-end-to-end",
+  "title": "Verify UI-check pipeline end-to-end against SetupNotes",
+  "description": "Read .flow/SetupNotes.md. For every tool, library, and service listed, exercise it end-to-end with realistic sample data and capture observable evidence under .flow/tasks/<taskId>/screenshots/. Acceptance: every entry runs against a real surface with passing evidence; failures logged to issues/ as harness gaps.",
+  "contextFiles": [".flow/SetupNotes.md", "instructions.md", "Map.md"],
+  "requires": [],
+  "hasUI": true,
+  "hasSpec": false,
+  "hasCodeReview": false
+}
+```
+
 ## Inputs
 
 Read all provided inputs before doing anything else:
@@ -24,55 +41,6 @@ Read all provided inputs before doing anything else:
 If any of these are missing, emit
 `FLOW_BLOCKED: setup output missing — re-run /setup` and stop.
 
-## Step 0 — Runtime verification mandate
-
-Setup installed and configured the tools but **did not test them**.
-Runtime verification is your responsibility, expressed as tasks the
-implementing agent runs end-to-end.
-
-### A. The first task you emit MUST be the pipeline-verification sentinel
-
-`tasks[0]` is fixed:
-
-```json
-{
-  "id": "verify-pipeline-end-to-end",
-  "title": "Verify UI-check pipeline end-to-end against SetupNotes",
-  "description": "Read .flow/SetupNotes.md. For every tool, library, and service listed, exercise it end-to-end with realistic sample data (real shapes, real edge cases — not minimal stubs) and capture observable evidence under .flow/tasks/<taskId>/screenshots/. Acceptance: every entry in SetupNotes runs against a real surface with passing evidence; failures are logged to issues/ as harness gaps. This task gates the whole pipeline.",
-  "contextFiles": [".flow/SetupNotes.md", "instructions.md", "Map.md"],
-  "requires": [],
-  "hasUI": true,
-  "hasSpec": false,
-  "hasCodeReview": false
-}
-```
-
-This sentinel is verification, not feature work — `hasSpec: false`,
-`hasCodeReview: false`, `hasUI: true`.
-
-### B. Every other task that touches a tool must verify it end-to-end
-
-When a feature task uses an MCP, CLI, library, or service, its
-`description` must:
-
-1. Enumerate exactly which tools/libraries/services the task invokes.
-2. Specify **realistic** sample data (real shapes, real edge cases —
-   not minimal stubs).
-3. Spell out the observable output that proves success (the response
-   payload shape, the rendered DOM, the file written, the row inserted,
-   the screenshot evidence path).
-
-No mocking, no stubbing for tools the plan declares — those calls go
-through to the real tool. Stub only for upstream services the plan
-explicitly marks as "mocked in dev."
-
-### C. Make `tasks[0]` blocking for everything else
-
-Every other task in `requires` must transitively depend on
-`verify-pipeline-end-to-end` so the pipeline cannot ship feature work
-on broken tools. The simplest pattern: every task whose `requires` is
-otherwise empty lists `["verify-pipeline-end-to-end"]` instead.
-
 ## Step 1 — Decompose into tasks
 
 Decompose the work into a flat list of tasks. Each task should read as
@@ -80,10 +48,10 @@ if a project manager is handing it off to a lead senior engineer. A
 task must be:
 
 - **Self-contained** — full context about what to build and how it fits
-  into the overall project. A fresh engineer reading only this
+  into the overall project. An engineer reading only this
   description should know exactly what's needed.
 - **Concrete** — specific about the expected outcome. What it looks
-  like when done, what it produces, what changes in the codebase.
+  like when done, what it produces, what changes in the codebase at a high level.
 - **Scoped** — one logical unit of work, implementable in a single
   session.
 
@@ -152,7 +120,9 @@ Rules for the JSON output:
   the derived ids stay unique.
 - `description`: full, detailed, self-contained, written as a PM
   handoff to a senior engineer — full context about the feature, how
-  it fits into the project, and what done looks like.
+  it fits into the project, and what done looks like. If the task uses
+  a tool/MCP/library/service, name it, specify realistic sample data
+  (not stubs), and define the observable output that proves success.
 - `contextFiles`: existing-file paths auto-loaded as `@path` mentions
   into the implementing agent. Use `Map.md` as the source-of-truth when
   picking paths. Be deliberate, not exhaustive — every extra file
