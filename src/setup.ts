@@ -120,6 +120,42 @@ export async function scaffoldFlowDir(
   }
 }
 
+/**
+ * Add any bundled skill subdirectories that are not yet present in
+ * `.flow/skills/`, and copy any bundled files inside existing skill
+ * subdirectories that are missing locally. Never overwrites user-edited
+ * files. Returns the list of top-level skill subdirectories that did not
+ * exist before this call.
+ *
+ * Safe to invoke on every non-read-only Flow command — idempotent and
+ * preserves user customisations.
+ */
+export async function syncBundledSkills(
+  paths: Paths,
+  assetsDir: string,
+): Promise<{ added: string[] }> {
+  const srcSkills = path.join(assetsDir, "skills");
+  try {
+    await fs.access(srcSkills);
+  } catch {
+    return { added: [] };
+  }
+  await ensureDir(paths.skillsDir);
+  const [srcEntries, destEntries] = await Promise.all([
+    fs.readdir(srcSkills, { withFileTypes: true }),
+    fs.readdir(paths.skillsDir, { withFileTypes: true }).catch(() => []),
+  ]);
+  const destNames = new Set(
+    destEntries.filter((e) => e.isDirectory()).map((e) => e.name),
+  );
+  const added = srcEntries
+    .filter((e) => e.isDirectory() && !destNames.has(e.name))
+    .map((e) => e.name)
+    .sort();
+  await copySkillsTree(srcSkills, paths.skillsDir);
+  return { added };
+}
+
 async function copySkillsTree(src: string, dest: string): Promise<void> {
   const entries = await fs.readdir(src, { withFileTypes: true });
   for (const entry of entries) {

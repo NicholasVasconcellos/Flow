@@ -139,6 +139,19 @@ const THINKING_KEYWORD: Record<ThinkingMode, string> = {
   ultrathink: "Use the `ultrathink` thinking budget for this turn.",
 };
 
+export class MissingSkillError extends Error {
+  readonly skillName: string;
+  readonly skillPath: string;
+  constructor(skillName: string, skillPath: string) {
+    super(
+      `Skill "${skillName}" not found at ${skillPath}. Ensure .flow/skills/${skillName}/SKILL.md exists.`,
+    );
+    this.name = "MissingSkillError";
+    this.skillName = skillName;
+    this.skillPath = skillPath;
+  }
+}
+
 export async function composePrompt(
   deps: Pick<AgentRunnerDeps, "paths">,
   args: SpawnArgs,
@@ -151,9 +164,7 @@ export async function composePrompt(
   try {
     await fs.access(skillPath);
   } catch {
-    throw new Error(
-      `Skill "${args.skillName}" not found at ${skillPath}. Ensure .flow/skills/${args.skillName}/SKILL.md exists.`,
-    );
+    throw new MissingSkillError(args.skillName, skillPath);
   }
   const sections: string[] = [`@${skillPath}`];
 
@@ -664,6 +675,9 @@ function execaSpawner(args: {
     buffer: false,
     reject: false,
     stdin: "ignore",
+    // Put the child in its own process group so a single signal to -pid
+    // reaps the agent + its MCP grandchildren together. See `kill` below.
+    detached: true,
   });
 
   // Force-close stdio after the grace window — see STDIO_DRAIN_GRACE_MS.
@@ -684,8 +698,21 @@ function execaSpawner(args: {
     stderr: linesFromNodeStream(child.stderr as NodeJS.ReadableStream | null),
     exit,
     kill(signal?: NodeJS.Signals) {
+      const sig = signal ?? "SIGTERM";
+      // Group-kill: -pid signals every process in the child's process group
+      // (the agent + any MCP grandchildren). Falls back to a direct child
+      // signal if pid is unavailable or the group is already gone.
+      const pid = child.pid;
+      if (typeof pid === "number") {
+        try {
+          process.kill(-pid, sig);
+          return;
+        } catch {
+          /* fall through to direct child kill */
+        }
+      }
       try {
-        child.kill(signal ?? "SIGTERM");
+        child.kill(sig);
       } catch {
         /* no-op */
       }
@@ -748,6 +775,10 @@ export class AgentRunner {
   /** Per-(taskId, stage) running count of sessions spawned so the UI can
    *  group repeated runs as "T — exec — 1", "T — exec — 2", etc. */
   private readonly ordinalCounters = new Map<string, number>();
+  /** Currently-live spawned processes. Registered on spawn and removed when
+   *  the child exits. Used by `killAllLive` so the SIGINT path can reap any
+   *  in-flight agent + its MCP grandchildren before exiting. */
+  private readonly liveProcs = new Set<SpawnedProcess>();
 
   constructor(deps: AgentRunnerDeps) {
     this.paths = deps.paths;
@@ -844,6 +875,8 @@ export class AgentRunner {
       args: argv,
       cwd: args.worktreePath,
     });
+    this.liveProcs.add(proc);
+    void proc.exit.finally(() => this.liveProcs.delete(proc));
 
     // Drain stderr, keeping the last ~40 lines so failures surface a reason.
     const stderrTail: string[] = [];

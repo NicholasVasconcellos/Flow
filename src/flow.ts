@@ -10,6 +10,7 @@ import { Scheduler } from "./scheduler.js";
 import {
   initProject,
   resolveBundledAssetsDir,
+  syncBundledSkills,
   ensureTasksLoaded as setupEnsureTasksLoaded,
   watchPlan,
 } from "./setup.js";
@@ -447,6 +448,20 @@ export async function createFlow(
     agent,
     eventBus,
   });
+
+  // Bundled skills can grow over time; existing projects must pick up
+  // newly-added skill directories so stages like `update-learning` /
+  // `merge-verify` don't crash the orchestrator on first reach. Add-only,
+  // never overwrites user edits. Skipped for read-only commands.
+  if (!opts.readOnly) {
+    const sync = await syncBundledSkills(paths, assetsDir);
+    if (sync.added.length > 0) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `Synced ${sync.added.length} bundled skill(s) into .flow/skills: ${sync.added.join(", ")}`,
+      );
+    }
+  }
 
   // Clear out any tasks left `status=running` by a previous orchestrator
   // that was killed mid-run. No worker exists yet in this fresh process,

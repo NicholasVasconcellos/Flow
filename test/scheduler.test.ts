@@ -19,6 +19,7 @@ import type {
   TaskStage,
 } from "../src/types.js";
 import type { AgentRunner, SpawnArgs } from "../src/agent.js";
+import { MissingSkillError } from "../src/agent.js";
 import type { GitManager, CommitMessage } from "../src/git.js";
 
 // ---------------------------------------------------------------------------
@@ -1131,6 +1132,75 @@ test(
     );
     assert.equal(warnNotifs.length, 1, "expected exactly one unknown-stage warn");
     assert.match(warnNotifs[0]!.body, /totally-not-a-real-stage/);
+  },
+);
+
+test(
+  "missing skill: stage pauses with actionable message on first attempt (no retries)",
+  { timeout: 10000 },
+  async () => {
+    const h = await makeHarness({
+      taskDefs: [mkTaskDef("A")],
+      config: { retryCount: 5 },
+      agentScript: (call) => {
+        if (call.stage === "spec") {
+          throw new MissingSkillError(
+            "spec",
+            "/fake/.flow/skills/spec/SKILL.md",
+          );
+        }
+        return {};
+      },
+    });
+
+    const t = await h.scheduler.runTask("A");
+    assert.equal(t.status, "paused");
+    assert.equal(t.stage, "spec");
+    assert.match(t.lastError!.message, /Skill "spec" missing/);
+    assert.match(t.lastError!.message, /flow init/);
+
+    const specCalls = h.agent.calls.filter((c) => c.stage === "spec");
+    assert.equal(
+      specCalls.length,
+      1,
+      "missing-skill is non-retryable — should not consume retry budget",
+    );
+
+    const errs = h.notifications.filter((n) => n.severity === "error");
+    assert.equal(errs.length, 1);
+    assert.match(errs[0]!.body, /Skill "spec" missing/);
+  },
+);
+
+test(
+  "runAll drain survives a per-task throw: peer task still completes",
+  { timeout: 10000 },
+  async () => {
+    const h = await makeHarness({
+      taskDefs: [mkTaskDef("A"), mkTaskDef("B")],
+      config: { retryCount: 0, maxConcurrent: 2 },
+      agentScript: (call) => {
+        if (call.taskId === "A" && call.stage === "spec") {
+          throw new MissingSkillError(
+            "spec",
+            "/fake/.flow/skills/spec/SKILL.md",
+          );
+        }
+        return {};
+      },
+    });
+
+    await h.scheduler.runAll();
+
+    const a = h.state.getTask("A")!;
+    const b = h.state.getTask("B")!;
+    assert.equal(a.status, "paused", "broken task should be paused, not running");
+    assert.match(a.lastError!.message, /Skill "spec" missing/);
+    assert.equal(
+      b.status,
+      "merged",
+      "healthy peer should reach merged despite A's failure",
+    );
   },
 );
 

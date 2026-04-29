@@ -11,7 +11,7 @@ import type {
   TaskStage,
 } from "./types.js";
 import type { AgentRunner } from "./agent.js";
-import { isLoopedOnBlockedTool } from "./agent.js";
+import { isLoopedOnBlockedTool, MissingSkillError } from "./agent.js";
 import type { StateStore } from "./state.js";
 import type { GitManager } from "./git.js";
 import type { EventBus } from "./events.js";
@@ -589,18 +589,33 @@ export class Scheduler {
       );
     }
 
-    const session = await this.agent.spawnAgent({
-      taskId,
-      stage,
-      skillName: stageSkill(stage),
-      worktreePath,
-      task: taskDefView(task),
-      contextFiles: stageContextFiles,
-      ...(stage === "exec_ui_check"
-        ? { uiReviewRound: task.uiReviewRound }
-        : {}),
-      ...(extraPrompt ? { extraPrompt } : {}),
-    });
+    let session: Session;
+    try {
+      session = await this.agent.spawnAgent({
+        taskId,
+        stage,
+        skillName: stageSkill(stage),
+        worktreePath,
+        task: taskDefView(task),
+        contextFiles: stageContextFiles,
+        ...(stage === "exec_ui_check"
+          ? { uiReviewRound: task.uiReviewRound }
+          : {}),
+        ...(extraPrompt ? { extraPrompt } : {}),
+      });
+    } catch (err) {
+      // Pre-spawn failures (e.g. missing skill file) never produce a Session,
+      // so they bypass the failure-handling path below. Translate them into a
+      // per-task pause here so a single bad stage can't escape into the drain
+      // and crash peer tasks. Skip retries for non-recoverable errors like
+      // MissingSkillError — retrying won't materialize the file.
+      if (err instanceof MissingSkillError) {
+        const message = `Skill "${err.skillName}" missing at ${err.skillPath}. Re-run \`flow init\` to install bundled skills, then resume the task.`;
+        return await this.markPaused(taskId, stage, "", message);
+      }
+      const message = `${stage} crashed before producing a session: ${(err as Error).message}`;
+      return await this.markPaused(taskId, stage, "", message);
+    }
 
     this.state.upsertSession(session);
 
@@ -1353,11 +1368,33 @@ export class Scheduler {
         if (slots <= 0) break;
         started.add(id);
         slots -= 1;
-        const p = this.runTask(id).finally(() => {
-          // After this task settles, try filling more slots — deferred to
-          // next microtask so the `running` map has been updated.
-          queueMicrotask(fillSlots);
-        });
+        // runTask should never throw — every per-task failure should already be
+        // a paused/blocked status update inside runAgentStage. If something
+        // escapes anyway, mark the task paused defensively so one bad task
+        // can't take down the whole drain (mirrors runWithConcurrency below).
+        const p = this.runTask(id)
+          .catch(async (err) => {
+            const t = this.state.getTask(id);
+            if (t) {
+              t.status = "paused";
+              t.lastError = {
+                stage: t.stage,
+                message: `runTask threw unexpectedly: ${(err as Error).message}`,
+                at: nowIso(),
+              };
+              t.updatedAt = nowIso();
+              this.state.upsertTask(t);
+              await this.saveState();
+              this.eventBus.emit("task.upsert", { task: { ...t } });
+              return { ...t };
+            }
+            throw err;
+          })
+          .finally(() => {
+            // After this task settles, try filling more slots — deferred to
+            // next microtask so the `running` map has been updated.
+            queueMicrotask(fillSlots);
+          });
         tracked.push(p);
       }
     };
