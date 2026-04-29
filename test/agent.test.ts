@@ -211,6 +211,62 @@ test("composePrompt throws with skill name when skill file missing", async () =>
   );
 });
 
+test("composePrompt omits commit step for non-committing stages", async () => {
+  const root = await mkTmp();
+  const paths = new Paths(root);
+  await writeSkill(paths, "merge-resolve", "SKILL BODY");
+  await writeSkill(paths, "update-learning", "SKILL BODY");
+
+  for (const stage of ["merge-resolve", "update-learning"] as const) {
+    const prompt = await composePrompt(
+      { paths },
+      {
+        taskId: "T1",
+        stage,
+        skillName: stage,
+        worktreePath: root,
+      },
+    );
+
+    assert.match(prompt, /# Stage protocol/, `${stage} should still get protocol preamble`);
+    assert.doesNotMatch(
+      prompt,
+      /git add -A && git commit/,
+      `${stage} must not include commit instruction`,
+    );
+    assert.match(
+      prompt,
+      /3\. Write the stage signal and stop:/,
+      `${stage} stage-signal step should be renumbered to 3`,
+    );
+    assert.doesNotMatch(
+      prompt,
+      /4\. Write the stage signal/,
+      `${stage} should not have a step 4`,
+    );
+  }
+});
+
+test("composePrompt includes commit step for committing stages", async () => {
+  const root = await mkTmp();
+  const paths = new Paths(root);
+  await writeSkill(paths, "exec", "SKILL BODY");
+
+  const prompt = await composePrompt(
+    { paths },
+    {
+      taskId: "T1",
+      stage: "exec",
+      skillName: "exec",
+      worktreePath: root,
+    },
+  );
+
+  assert.match(prompt, /# Stage protocol/);
+  assert.match(prompt, /git add -A && git commit/);
+  assert.match(prompt, /4\. Write the stage signal and stop:/);
+});
+
 // ---------------------------------------------------------------------------
 // spawnAgent — happy path
 // ---------------------------------------------------------------------------

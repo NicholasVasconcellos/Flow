@@ -91,7 +91,7 @@ const STDIO_DRAIN_GRACE_MS = 2_000;
 // ---------------------------------------------------------------------------
 
 /** Stages where the agent is doing actual work in the task's worktree —
- *  these all get the standard commit + termination + stage-signal preamble.
+ *  these all get the termination + stage-signal preamble.
  *  Project-level stages (setup, get-tasks) do not commit or signal. */
 const TASK_AGENT_STAGES = new Set<string>([
   "spec",
@@ -103,6 +103,21 @@ const TASK_AGENT_STAGES = new Set<string>([
   "update-learning",
   "merge-resolve",
   "commit_recovery",
+]);
+
+/** Subset of TASK_AGENT_STAGES that actually authors a commit. The protocol's
+ *  "commit your changes" step is included only for these. Stages excluded:
+ *  - `merge-resolve` / `update-learning`: skill bodies explicitly forbid commits
+ *    (the orchestrator finalizes those).
+ *  - `commit_recovery`: the `commit` skill body itself drives `git add -A &&
+ *    git commit`, so the protocol step would be redundant. */
+const COMMITTING_STAGES = new Set<string>([
+  "spec",
+  "exec",
+  "exec_ui_check",
+  "code_review",
+  "code_review_ui_check",
+  "documentation",
 ]);
 
 /** Stages that produce content for the per-task `learnings-draft.md`.
@@ -255,28 +270,35 @@ export async function composePrompt(
   if (args.taskId && TASK_AGENT_STAGES.has(args.stage as string)) {
     const stageSignalPath = deps.paths.taskStageSignal(args.taskId);
     const progressPath = deps.paths.taskProgressTxt(args.taskId);
-    sections.push(
-      [
-        "# Stage protocol",
-        "1. Read `progress.txt` first; append a one-line note when you finish.",
-        "2. Do exactly the work this stage's skill requires — no adjacent cleanup.",
+    const isCommitting = COMMITTING_STAGES.has(args.stage as string);
+    const lines: string[] = [
+      "# Stage protocol",
+      "1. Read `progress.txt` first; append any meaningful context or extremely concise progress notes.",
+      "2. Do exactly the work this stage's skill requires — no adjacent cleanup.",
+    ];
+    if (isCommitting) {
+      lines.push(
         "3. When the acceptance checks for this stage pass, commit your changes:",
         '   `git add -A && git commit -m "<imperative subject ≤72 chars>"`.',
         "   Body bullets describing each meaningful change are encouraged.",
         "   Untracked files alone don't block the stage, but still `git add -A && git commit` to capture any legitimate new tracked work.",
-        "4. Write the stage signal and stop:",
-        `   echo '{"stage":"${args.stage}","status":"done"}' > ${stageSignalPath}`,
-        '   (use `"status":"blocked","reason":"…"` instead if you cannot proceed).',
-        `   progress.txt: ${progressPath}`,
-        "",
-        "If you complete the stage but want a human to audit a specific",
-        "decision before it ships, emit a single line on stdout in addition",
-        "to the stage signal:",
-        "   `FLOW_REVIEW_REQUESTED: <one-sentence reason>`",
-        "This surfaces a warn-level notification without halting the queue.",
-        "Reserve `FLOW_BLOCKED:` for cases where you cannot proceed at all.",
-      ].join("\n"),
+      );
+    }
+    const signalStepNum = isCommitting ? 4 : 3;
+    lines.push(
+      `${signalStepNum}. Write the stage signal and stop:`,
+      `   echo '{"stage":"${args.stage}","status":"done"}' > ${stageSignalPath}`,
+      '   (use `"status":"blocked","reason":"…"` instead if you cannot proceed).',
+      `   progress.txt: ${progressPath}`,
+      "",
+      "If you complete the stage but want a human to audit a specific",
+      "decision before it ships, emit a single line on stdout in addition",
+      "to the stage signal:",
+      "   `FLOW_REVIEW_REQUESTED: <one-sentence reason>`",
+      "This surfaces a warn-level notification without halting the queue.",
+      "Reserve `FLOW_BLOCKED:` for cases where you cannot proceed at all.",
     );
+    sections.push(lines.join("\n"));
   }
 
   return sections.join("\n\n");
