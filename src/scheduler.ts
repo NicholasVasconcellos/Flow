@@ -308,6 +308,20 @@ export class Scheduler {
     return Array.from(this.running.keys());
   }
 
+  /** Flip every task currently in `status="running"` to `paused` with the
+   *  given message as `lastError`. Used by the SIGINT shutdown path so
+   *  state.json reflects "interrupted" immediately rather than waiting for
+   *  the next startup's `recoverStaleTasks()` sweep. The status guard mirrors
+   *  `recoverStaleTasks` and prevents stomping a task that paused itself
+   *  just before the signal arrived. */
+  async pauseAllRunning(message: string): Promise<void> {
+    for (const taskId of this.runningTaskIds()) {
+      const task = this.state.getTask(taskId);
+      if (!task || task.status !== "running") continue;
+      await this.pauseWithMessage(taskId, message);
+    }
+  }
+
   cancel(): void {
     this.cancelFlag = true;
   }

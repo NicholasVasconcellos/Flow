@@ -1020,3 +1020,90 @@ test("repeat cap: tool_result + next tool_use bundled in one user payload still 
   assert.equal(session.status, "succeeded", `error: ${session.error}`);
   assert.doesNotMatch(session.error ?? "", /looped_on_blocked_tool/);
 });
+
+// ---------------------------------------------------------------------------
+// killAllLive — SIGINT shutdown helper
+// ---------------------------------------------------------------------------
+
+test("killAllLive sends the signal to every registered live proc", () => {
+  const root = "/tmp/flow-killalllive-noop";
+  const paths = new Paths(root);
+  const bus = new EventBus();
+  const handle = makeFakeSpawner();
+  const runner = new AgentRunner({
+    paths,
+    config: defaultConfig(),
+    eventBus: bus,
+    spawner: handle.spawner,
+    now: () => new Date(),
+  });
+
+  function fakeProc(): { proc: SpawnedProcess; killed: () => NodeJS.Signals | undefined } {
+    let killSignal: NodeJS.Signals | undefined;
+    const proc: SpawnedProcess = {
+      stdout: (async function* () {})(),
+      stderr: (async function* () {})(),
+      exit: new Promise<number>(() => {
+        /* never resolves; killAllLive must not await it */
+      }),
+      kill(signal) {
+        killSignal = signal;
+      },
+    };
+    return { proc, killed: () => killSignal };
+  }
+
+  const a = fakeProc();
+  const b = fakeProc();
+  const liveProcs = (
+    runner as unknown as { liveProcs: Set<SpawnedProcess> }
+  ).liveProcs;
+  liveProcs.add(a.proc);
+  liveProcs.add(b.proc);
+
+  runner.killAllLive("SIGTERM");
+
+  assert.equal(a.killed(), "SIGTERM");
+  assert.equal(b.killed(), "SIGTERM");
+});
+
+test("killAllLive swallows errors from individual proc.kill calls", () => {
+  const root = "/tmp/flow-killalllive-swallow";
+  const paths = new Paths(root);
+  const bus = new EventBus();
+  const handle = makeFakeSpawner();
+  const runner = new AgentRunner({
+    paths,
+    config: defaultConfig(),
+    eventBus: bus,
+    spawner: handle.spawner,
+    now: () => new Date(),
+  });
+
+  let secondKilled = false;
+  const throwing: SpawnedProcess = {
+    stdout: (async function* () {})(),
+    stderr: (async function* () {})(),
+    exit: new Promise<number>(() => {}),
+    kill() {
+      throw new Error("boom");
+    },
+  };
+  const surviving: SpawnedProcess = {
+    stdout: (async function* () {})(),
+    stderr: (async function* () {})(),
+    exit: new Promise<number>(() => {}),
+    kill() {
+      secondKilled = true;
+    },
+  };
+
+  const liveProcs = (
+    runner as unknown as { liveProcs: Set<SpawnedProcess> }
+  ).liveProcs;
+  liveProcs.add(throwing);
+  liveProcs.add(surviving);
+
+  runner.killAllLive("SIGTERM");
+  assert.equal(secondKilled, true, "later procs must still be killed after a thrower");
+});

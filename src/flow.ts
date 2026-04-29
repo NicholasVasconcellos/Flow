@@ -64,6 +64,7 @@ export interface Flow {
   updateConfig(patch: ConfigPatch): Promise<Config>;
   ensureTasksLoaded(): Promise<void>;
   stop(): void;
+  shutdown(message?: string): Promise<void>;
   getProject(): Project;
   getEventBus(): EventBus;
   getPaths(): Paths;
@@ -274,6 +275,18 @@ class FlowImpl implements Flow {
       this.watchDispose = null;
     }
     this.scheduler.cancel();
+  }
+
+  /** Graceful shutdown for the SIGINT/SIGTERM path: stop accepting new work,
+   *  kill any in-flight agent processes (so they don't survive as orphans
+   *  holding state-task slots), then checkpoint every still-`running` task
+   *  to `paused` with the given message so `state.json` reflects reality
+   *  before the process exits. Order matters — killing first means the next
+   *  resume won't double-spawn against an already-paused task. */
+  async shutdown(message = "Cancelled by SIGINT"): Promise<void> {
+    this.stop();
+    this.agent.killAllLive("SIGTERM");
+    await this.scheduler.pauseAllRunning(message);
   }
 
   getProject(): Project {

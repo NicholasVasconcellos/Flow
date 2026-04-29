@@ -334,17 +334,23 @@ function installSigintHandler(flow: Flow): void {
     }
     fired = true;
     // eslint-disable-next-line no-console
-    console.log(chalk.yellow("\n[flow] interrupt received — stopping (2s grace)..."));
-    try {
-      flow.stop();
-    } catch {
-      /* ignore */
-    }
+    console.log(
+      chalk.yellow("\n[flow] interrupt received — checkpointing (2s grace)..."),
+    );
+    void flow
+      .shutdown()
+      .catch(() => {
+        /* swallow — best-effort */
+      })
+      .finally(() => {
+        process.exit(130);
+      });
     setTimeout(() => {
       process.exit(130);
     }, 2000).unref?.();
   };
   process.on("SIGINT", handler);
+  process.on("SIGTERM", handler);
 }
 
 // ---------------------------------------------------------------------------

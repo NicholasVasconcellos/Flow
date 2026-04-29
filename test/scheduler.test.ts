@@ -1207,3 +1207,60 @@ test(
 function nowIsoLocal(): string {
   return new Date().toISOString();
 }
+
+// ---------------------------------------------------------------------------
+// pauseAllRunning — SIGINT checkpoint helper
+// ---------------------------------------------------------------------------
+
+test(
+  "pauseAllRunning checkpoints in-flight tasks to paused with the given message",
+  { timeout: 10000 },
+  async () => {
+    let release!: () => void;
+    const blocker = new Promise<void>((r) => {
+      release = r;
+    });
+
+    const h = await makeHarness({
+      taskDefs: [mkTaskDef("A")],
+      agentScript: async () => {
+        await blocker;
+        return {};
+      },
+    });
+
+    // Kick off runTask without awaiting. runTask synchronously registers A in
+    // its `running` map before its first await, so by the next microtask
+    // pauseAllRunning can observe A as in-flight.
+    const inFlight = h.scheduler.runTask("A");
+
+    // Poll briefly until runAgentStage flips status to "running" (it sets
+    // status before spawning the agent, so this happens early).
+    for (let i = 0; i < 100; i++) {
+      if (h.state.getTask("A")?.status === "running") break;
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    assert.equal(h.state.getTask("A")!.status, "running");
+
+    await h.scheduler.pauseAllRunning("Cancelled by SIGINT");
+
+    const a = h.state.getTask("A")!;
+    assert.equal(a.status, "paused");
+    assert.equal(a.lastError?.message, "Cancelled by SIGINT");
+    assert.ok(a.lastError?.stage, "lastError must record the stage");
+
+    // Release the blocked agent so runTask can settle and the test cleans up.
+    release();
+    await inFlight.catch(() => {
+      /* the pipeline keeps going past our pause; outcome doesn't matter */
+    });
+  },
+);
+
+test("pauseAllRunning is a no-op when nothing is in-flight", async () => {
+  const h = await makeHarness({ taskDefs: [mkTaskDef("A")] });
+  h.upserts.length = 0;
+  await h.scheduler.pauseAllRunning("Cancelled by SIGINT");
+  assert.equal(h.upserts.length, 0);
+  assert.equal(h.state.getTask("A")!.status, "ready");
+});

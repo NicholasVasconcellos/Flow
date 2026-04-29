@@ -143,6 +143,9 @@ function makeFakeFlow(): { flow: Flow; ctx: FakeFlowState } {
     stop() {
       ctx.stopped = true;
     },
+    async shutdown() {
+      ctx.stopped = true;
+    },
     getProject() {
       return ctx.project;
     },

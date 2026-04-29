@@ -795,6 +795,20 @@ export class AgentRunner {
     return next;
   }
 
+  /** Send `signal` to every currently-live spawned process. The default
+   *  spawner uses `detached: true` and group-kill, so a single SIGTERM here
+   *  reaps each agent + its MCP grandchildren. Used by the SIGINT shutdown
+   *  path; safe to call when nothing is live (no-op). */
+  killAllLive(signal: NodeJS.Signals = "SIGTERM"): void {
+    for (const proc of this.liveProcs) {
+      try {
+        proc.kill(signal);
+      } catch {
+        /* ignore — best-effort */
+      }
+    }
+  }
+
   async spawnAgent(args: SpawnArgs): Promise<Session> {
     const sessionId = args.sessionId ?? newId();
 
@@ -1300,6 +1314,8 @@ export class AgentRunner {
       ],
       cwd,
     });
+    this.liveProcs.add(proc);
+    void proc.exit.finally(() => this.liveProcs.delete(proc));
 
     // Consume stderr to keep the pipe flowing.
     void (async () => {
