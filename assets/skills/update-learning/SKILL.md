@@ -114,73 +114,15 @@ the bar. Zero promotions per task is normal.
 
 ### Where to write
 
-`<worktree>/.claude/skills/<kebab-topic>/SKILL.md`. One topic per skill.
+Prefer editing an existing skill at `<worktree>/.claude/skills/<topic>/SKILL.md`
+— scan for topical overlap first and make a narrow additive edit. If a new
+lesson fits an existing skill's trigger but the body would balloon, move
+detail into `references/<new-topic>.md` and link from SKILL.md.
 
-**Prefer editing an existing skill over creating a new one.** Scan
-`<worktree>/.claude/skills/*/SKILL.md` for topical overlap first. If you
-find one, make a narrow additive edit — don't rewrite or restructure it.
-
-### When the existing skill's scope would balloon
-
-If the new lesson fits the existing skill's _trigger_ but adding the full
-detail to the body would push it past ~500 lines or muddy its focus, move
-the detail into a subdirectory and reference it from the body. Use the
-canonical layout:
-
-```
-existing-skill/
-├── SKILL.md            # add a one-line pointer in the relevant section
-├── references/         # docs loaded on demand (most learnings go here)
-│   └── <new-topic>.md
-├── scripts/            # only if encoding executable steps
-└── assets/             # only if shipping templates/fixtures
-```
-
-Body addition looks like:
-
-> When <trigger>, see `references/<new-topic>.md` for <one-line summary>.
-
-This keeps the SKILL.md scannable while letting the detail live somewhere
-durable. Don't subdirectory-ify a skill that's still small — only when the
-body would otherwise lose focus.
-
-### Skill file format
-
-Follow the canonical Claude Code skill format. Minimum structure:
-
-```md
----
-name: <kebab-topic>
-description: >
-  <One- to two-sentence statement saying BOTH what the skill does AND
-  when it should trigger. Include concrete cues — file types, tool
-  names, commands, error patterns. This is what Claude Code matches
-  against to decide auto-invocation.>
----
-
-# <kebab-topic>
-
-<Imperative, concrete instructions. Include the _why_ in one or two
-sentences so a future reader can judge edge cases. Show example
-commands or snippets when they make the rule unambiguous.>
-```
-
-Frontmatter rules:
-
-- `name` matches the directory name, kebab-case.
-- `description` is the highest-leverage field — it gates whether the skill
-  loads at all. Write it so that a future agent reading only the prompt
-  could recognize "this is the situation that skill is for".
-- Body uses the imperative. Prefer "why → rule → example" over musty MUSTs.
-
-**Bad descriptions:**
-
-- "Helpful tips for the project." — no trigger.
-- "Use when working on the codebase." — fires always.
-- "How to do migrations." — no detectable cue.
-
-**Good descriptions** name the cue: file types, commands, tool names, error
-message patterns, task verbs.
+For format and frontmatter conventions, follow the skill-creator skill
+(loaded under Inputs above). The `description` is the highest-leverage
+field — name the trigger cue (file types, tool names, commands, error
+patterns) so the skill actually fires when needed.
 
 ---
 
@@ -194,14 +136,3 @@ message patterns, task verbs.
 - **Don't pad.** Empty Part A and zero promotions in Part B are both common
   and correct outcomes.
 
-## Stage signal
-
-When done, write the signal exactly once:
-
-```
-echo '{"stage":"update-learning","status":"done"}' > <stage signal path from prompt>
-```
-
-If genuinely blocked, write
-`{"stage":"update-learning","status":"blocked","reason":"…"}` and exit. The
-orchestrator only advances when this file is present.

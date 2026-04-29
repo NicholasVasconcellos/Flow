@@ -1,9 +1,6 @@
 ---
 name: exec
-description: >
-  Implement a task. Tests already exist from the spec phase — make them pass.
-  Uses subagents for parallel independent chunks when appropriate.
-  Trigger on: /exec
+description: Implement a task. Tests already exist from the spec phase — make them pass. Use subagents for independent chunks when appropriate.
 disable-model-invocation: true
 ---
 
@@ -17,36 +14,22 @@ You will receive:
 
 - The task title and description (including acceptance criteria)
 - The spec (test files written in the spec phase)
-- The project codebase (via CODEBASE.md and direct file reads)
+- The project codebase (via `Map.md` and direct file reads)
 
 Read all three before writing any code.
 
 ## Step 0 — UI Review remediation (when present)
 
-If your context files include a `round-<N>-issues.md` (path shown
-under `# Context files` in your prompt), the previous `exec_ui_check`
-pass found problems and the scheduler routed back to you to fix them.
+If your context files include a `round-<N>-issues.md`, the previous
+`exec_ui_check` pass found problems and routed back to you. Treat it
+as the primary objective: each issue's `Acceptance:` line is the pass
+condition. Do not edit the round file — the next `exec_ui_check` pass
+overwrites it.
 
-When this file is present, treat it as your **primary objective for
-this run**:
-
-1. Read every issue in the round file. For each, note the
-   `Acceptance:` line — that is your concrete pass condition.
-2. Re-read the task title and description. The original acceptance
-   criteria still bind. If a UI-Review issue's acceptance conflicts
-   with the original task acceptance (e.g., the round file demands
-   behavior the spec forbids), do **not** guess — emit
-   `FLOW_BLOCKED: round-<N> issue conflicts with task acceptance — <one-sentence summary>`
-   and stop.
-3. Draft a short plan covering every issue, then implement. Issues
-   with shared root causes can be addressed by a single change; issues
-   touching unrelated surfaces can use the subagent pattern (Step 3).
-4. After implementing, run unit + UI tests as usual. Every issue's
-   `Acceptance:` line must hold before you commit.
-
-Do not edit the round file — `exec_ui_check` will write a fresh
-`round-<N+1>-issues.md` next pass. If a previously-listed issue is
-still present, it will reappear there.
+If a round-file `Acceptance:` conflicts with the task's original
+acceptance criteria, do not guess — emit
+`FLOW_BLOCKED: round-<N> issue conflicts with task acceptance — <one-sentence summary>`
+and stop.
 
 ## Step 1 — Read the tests
 
@@ -87,14 +70,6 @@ Do not use subagents when chunks share a file being written — concurrent write
 
 If the work is sequential or shares files, implement it yourself without subagents. Follow the execution plan in order.
 
-### Code standards
-
-- Follow the existing code conventions in the project (indentation, naming, import style, error handling patterns).
-- Write concise, clean code. Do not add comments that describe what the code does — the code should be self-explanatory.
-- Do not add docstrings, JSDoc, or inline documentation unless the project already uses them consistently.
-- Handle errors at system boundaries (network calls, file I/O, DB queries, external APIs). Do not swallow errors silently.
-- Do not add logging beyond what already exists in the project's logging pattern.
-
 ## Step 4 — Run tests and fix failures
 
 After implementation, run the full test suite for this task.
@@ -127,61 +102,7 @@ If browser tests reveal a bug, fix the implementation and re-run both unit and b
 - Do not install new dependencies without checking if the functionality already exists in the project.
 - Do not modify files outside the scope of this task.
 
-## Progress notes
+## Done when
 
-Read `progress.txt` (provided via `@progress.txt` in your prompt) at the
-start so you see what spec already decided. Append a note when you finish:
-the implementation plan that worked, plus any non-obvious decision a later
-stage should know about. Be extremely concise.
-
-## Termination
-
-Stop the moment all tests for this task pass and you have committed the
-implementation. Do not refactor unrelated files, polish docs, or add tests
-beyond the spec. Any extra work is out of scope for this stage.
-
-## Learnings
-
-After completing the task, append an entry to `learnings-draft.md` (path provided in the prompt's **Runtime paths** block) **only if** this session surfaced something a future agent on this codebase would benefit from knowing. Create the file if it doesn't exist.
-
-**Append when:**
-
-- You hit an error or surprising failure a future agent should avoid
-- You discovered a tool quirk, flag, path, or version constraint that wasn't documented
-- You deviated from the obvious approach and the reason isn't visible in the diff
-- You learned a project invariant or convention not in CLAUDE.md
-
-**Do NOT write:**
-
-- Lists of doc files updated or "docs updated" sentences
-- Restatements of the task description
-- Anything already visible in the diff or git history
-- Session logs (progress.txt and summary.md handle those)
-
-An empty draft is the correct outcome when nothing surprising came up.
-
-**Format each entry as:**
-​~~~
-
-## <tool or topic>
-
-- <one-sentence lesson title>: <2-3 sentence explanation covering what, when, why, and what to do differently. Plain terms, only relevant information.>
-
-```
-
-**Example:**
-​~~~
-## Playwright MCP
-- Headless mode silently drops file downloads: When running Playwright MCP in headless mode, `page.download()` returns success but the file never lands on disk. Use `headless: false` or switch to direct HTTP fetch for downloads.
-```
-
-## Stage signal
-
-After your final commit, write the stage signal exactly once:
-
-```
-echo '{"stage":"code_review","status":"done"}' > <stage signal path from prompt>
-```
-
-If you cannot proceed safely, write `{"stage":"code_review","status":"blocked","reason":"…"}`
-instead and exit.
+All tests for this task pass (unit, plus browser/UI if applicable) and the
+implementation is committed.

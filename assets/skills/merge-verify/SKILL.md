@@ -40,37 +40,18 @@ Concerns to raise:
   signatures changing, response shapes shifting, removed exports —
   things downstream code depends on.
 
-Things that are **not** concerns:
-
-- Style or formatting differences.
-- Code you would have written differently. The task agent already shipped
-  this; your job is to catch drops, not relitigate design.
-- Things the description explicitly authorizes.
+Ignore style, design preferences, and anything the description authorizes.
 
 ## Output protocol
 
 Conclude your turn with exactly one of:
 
-1. **Silence.** No `FLOW_BLOCKED:` or `FLOW_REVIEW_REQUESTED:` line. The
-   merge looks faithful to intent. The orchestrator marks the task
-   merged.
-2. **`FLOW_REVIEW_REQUESTED: <one-sentence concern>`** — the merge looks
-   workable but a human should glance at it. The task still moves to
-   `merged`; a warn-level notification surfaces in the UI.
-3. **`FLOW_BLOCKED: <reason>`** — the merge has a problem that should
-   not ship. The merge commit stays on `main` (this is a read-only
-   audit; you do not revert), but the task moves to `blocked` so a
-   human decides whether to revert, fix-forward, or accept.
+1. **Silence** — merge is faithful to intent; orchestrator marks the task merged.
+2. **`FLOW_REVIEW_REQUESTED: <one-sentence concern>`** — workable but a human
+   should glance; task still moves to `merged` with a warn-level notification.
+3. **`FLOW_BLOCKED: <reason>`** — should not ship; the merge commit stays on
+   `main` (read-only audit, no revert), but the task moves to `blocked`.
 
-## Constraints
-
-This is a read-only audit:
-
-- Do not edit files.
-- Do not run `git commit`, `git revert`, or any history-rewriting command.
-- Do not run tests or builds — the verify gate already ran pre-commit.
-- Do not chase issues outside the merge diff. Stay scoped to "what did
-  this commit change vs what should it have changed."
-
-When you have read the diff and reached a conclusion, emit your one-line
-signal (or stay silent) and stop.
+This is a read-only audit: do not edit files, do not run git history-rewriting
+commands, do not run tests or builds (verify gate already ran pre-commit), and
+stay scoped to the merge diff.

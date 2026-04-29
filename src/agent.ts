@@ -105,6 +105,18 @@ const TASK_AGENT_STAGES = new Set<string>([
   "commit_recovery",
 ]);
 
+/** Stages that produce content for the per-task `learnings-draft.md`.
+ *  `update-learning` consolidates the draft (Part A) so it is excluded;
+ *  merge-resolve / commit_recovery do not produce learnings. */
+const LEARNINGS_DRAFT_STAGES = new Set<string>([
+  "spec",
+  "exec",
+  "exec_ui_check",
+  "code_review",
+  "code_review_ui_check",
+  "documentation",
+]);
+
 const THINKING_KEYWORD: Record<ThinkingMode, string> = {
   off: "",
   think: "Use the `think` thinking budget for this turn.",
@@ -173,8 +185,14 @@ export async function composePrompt(
       `screenshots:       ${screenshotsDir}`,
       `stage signal:      ${stageSignalPath}`,
     ];
-    if (args.stage === "exec_ui_check" && typeof args.uiReviewRound === "number") {
-      const roundFile = deps.paths.taskRoundIssues(args.taskId, args.uiReviewRound);
+    if (
+      args.stage === "exec_ui_check" &&
+      typeof args.uiReviewRound === "number"
+    ) {
+      const roundFile = deps.paths.taskRoundIssues(
+        args.taskId,
+        args.uiReviewRound,
+      );
       runtimeLines.push(
         `round issues file: ${roundFile}`,
         `ui-review round:   ${args.uiReviewRound}`,
@@ -200,6 +218,38 @@ export async function composePrompt(
   const extra = (args.extraPrompt ?? "").trim();
   if (extra) {
     sections.push(`# Prior session summaries / addendum\n${extra}`);
+  }
+
+  if (args.taskId && LEARNINGS_DRAFT_STAGES.has(args.stage as string)) {
+    sections.push(
+      [
+        "# Learnings draft",
+        "After completing the stage, append to `learnings-draft.md` (path in",
+        "the **Runtime paths** block) ONLY IF this session surfaced something",
+        "a future agent on this codebase would benefit from knowing.",
+        "",
+        "Append when:",
+        "- You hit an error or surprising failure a future agent should avoid.",
+        "- You discovered a tool quirk, flag, path, or version constraint that",
+        "  was not documented.",
+        "- You deviated from the obvious approach and the reason isn't visible",
+        "  in the diff.",
+        "- You learned a project invariant or convention not in CLAUDE.md.",
+        "",
+        "Do NOT write:",
+        "- Lists of doc files updated or \"docs updated\" sentences.",
+        "- Restatements of the task description.",
+        "- Anything already visible in the diff or git history.",
+        "- Session logs (progress.txt and summary.md handle those).",
+        "",
+        "An empty draft is the correct outcome when nothing surprising came up.",
+        "",
+        "Format each entry as:",
+        "    ## <tool or topic>",
+        "    - <one-sentence lesson title>: <2-3 sentence explanation: what,",
+        "      when, why, and what to do differently>",
+      ].join("\n"),
+    );
   }
 
   if (args.taskId && TASK_AGENT_STAGES.has(args.stage as string)) {
@@ -269,7 +319,8 @@ function updateTokensFromPayload(
     // carrying these keys.
     const usage = obj["usage"];
     if (usage && typeof usage === "object") {
-      changed = applyUsageObject(acc, usage as Record<string, unknown>) || changed;
+      changed =
+        applyUsageObject(acc, usage as Record<string, unknown>) || changed;
     }
     if (
       "input_tokens" in obj ||
@@ -698,10 +749,13 @@ export class AgentRunner {
     const stageKey = args.stage as StageKey;
     const stageCfg = resolveStageConfig(this.config, stageKey);
     const model = args.model ?? stageCfg.model ?? this.config.defaults.model;
-    const effort = args.effort ?? stageCfg.effort ?? this.config.defaults.effort;
+    const effort =
+      args.effort ?? stageCfg.effort ?? this.config.defaults.effort;
     const resolved = resolveEffort(model, effort);
     const thinkingMode =
-      args.thinkingMode ?? resolved.thinkingMode ?? this.config.defaults.thinkingMode;
+      args.thinkingMode ??
+      resolved.thinkingMode ??
+      this.config.defaults.thinkingMode;
 
     const ordinal =
       args.ordinal ?? this.computeOrdinal(args.taskId, args.stage as string);
@@ -736,7 +790,9 @@ export class AgentRunner {
       autocompacted: false,
       costUsd: 0,
       claudeSessionId,
-      ...(args.parentSessionId ? { parentSessionId: args.parentSessionId } : {}),
+      ...(args.parentSessionId
+        ? { parentSessionId: args.parentSessionId }
+        : {}),
     };
 
     this.eventBus.emit("session.started", { session: { ...session } });
@@ -1231,7 +1287,6 @@ export class AgentRunner {
 // ---------------------------------------------------------------------------
 // argv construction — spec §8
 // ---------------------------------------------------------------------------
-
 export function buildClaudeArgv(opts: {
   prompt: string;
   model: string;

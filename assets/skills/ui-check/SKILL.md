@@ -15,9 +15,9 @@ worktree. Detect which surface the task targets:
 
 | Surface | How to detect |
 | --- | --- |
-| **Web** | `package.json` includes `react`/`vue`/`svelte`/`next`/`vite`, or changed files include `*.html`, `*.jsx`, `*.tsx`, `*.css`, `*.vue`, `*.svelte` |
-| **iOS** | Repo contains `*.xcodeproj` / `*.xcworkspace`, `Package.swift`, or `Podfile`; changed files include `*.swift` / `*.m` / `*.mm` |
-| **Other desktop app** (Godot, Unity, native) | Engine markers like `project.godot`, `Assets/` + `ProjectSettings/`, or other engine-specific layouts |
+| **Web** | `package.json` includes `react`/`vue`/`svelte`/`next`/`vite`, or changed files include `*.html`/`*.jsx`/`*.tsx`/`*.css`/`*.vue`/`*.svelte` |
+| **iOS** | Repo contains `*.xcodeproj`/`*.xcworkspace`/`Package.swift`/`Podfile`; changed files include `*.swift`/`*.m`/`*.mm` |
+| **Native / engine** | Engine markers (e.g. `project.godot`, `Assets/` + `ProjectSettings/`) |
 | **No UI surface** | Backend, library, infra, or pure config changes only |
 
 If the surface is **No UI surface**, append `No UI surface; skipped.`
@@ -139,22 +139,13 @@ Use this exact format:
 ...
 ```
 
-Required fields per issue: `Symptom`, `Repro`, `Evidence`,
-`Acceptance`. `Suspected cause` is optional.
-
 If you found **zero** issues, still write the round file with the
 header block and `**Outcome:** 0 issues` plus an empty table — the
 scheduler reads the file to decide whether to advance the pipeline or
-re-enter exec. A missing file with no issues is ambiguous; an
-explicitly-empty round file is unambiguous.
+re-enter exec.
 
-Save evidence (screenshots, accessibility-tree dumps, log excerpts)
-under `.flow/tasks/<taskId>/screenshots/round-<N>/` so each round's
-artifacts are clearly grouped.
-
-Project-side issues never go to `issues/` at the Flow repo root — that
-directory is reserved for harness bugs. Harness bugs never go in the
-round file — the implementing agent can't fix Flow.
+Save evidence under `.flow/tasks/<taskId>/screenshots/round-<N>/` so
+each round's artifacts are grouped.
 
 ## Rules
 
@@ -167,67 +158,10 @@ round file — the implementing agent can't fix Flow.
   (web) over screenshots — capture pixels only as evidence for a
   flagged regression.
 
-## Progress notes
+## Done when
 
-Read `progress.txt` (mentioned via `@progress.txt` in your prompt) at
-the start. Append a note when you finish: surface checked, round number,
-and the count of issues found (e.g.
-`ui-check: web round 2 — 3 issues (1 HIGH, 2 MED); harness OK`). Be
-extremely concise.
-
-## Termination
-
-When every affected route/screen has been exercised, evidence is saved,
-the round-N issues file is written (with at minimum the header block
-and outcome line, even when zero issues), and any harness gap is filed
-under `issues/`, **stop**. Do not edit application code or pursue
-regressions yourself — the scheduler will route exec back to address
-them if the file is non-empty.
-
-## Learnings
-
-After completing the task, append an entry to `learnings-draft.md` (path provided in the prompt's **Runtime paths** block) **only if** this session surfaced something a future agent on this codebase would benefit from knowing. Create the file if it doesn't exist.
-
-**Append when:**
-
-- You hit an error or surprising failure a future agent should avoid
-- You discovered a tool quirk, flag, path, or version constraint that wasn't documented
-- You deviated from the obvious approach and the reason isn't visible in the diff
-- You learned a project invariant or convention not in CLAUDE.md
-
-**Do NOT write:**
-
-- Lists of doc files updated or "docs updated" sentences
-- Restatements of the task description
-- Anything already visible in the diff or git history
-- Session logs (progress.txt and summary.md handle those)
-
-An empty draft is the correct outcome when nothing surprising came up.
-
-**Format each entry as:**
-​~~~
-
-## <tool or topic>
-
-- <one-sentence lesson title>: <2-3 sentence explanation covering what, when, why, and what to do differently. Plain terms, only relevant information.>
-
-```
-
-**Example:**
-​~~~
-## Playwright MCP
-- Headless mode silently drops file downloads: When running Playwright MCP in headless mode, `page.download()` returns success but the file never lands on disk. Use `headless: false` or switch to direct HTTP fetch for downloads.
-```
-
-## Stage signal
-
-After any commit, write the stage signal exactly once. The stage name in
-the signal must match the stage you were spawned for (`exec_ui_check` or
-`code_review_ui_check` — see your prompt's Runtime paths block):
-
-```
-echo '{"stage":"<this stage>","status":"done"}' > <stage signal path>
-```
-
-If you cannot proceed safely, write `{"stage":"<this stage>","status":"blocked","reason":"…"}`
-instead and exit.
+Every affected route/screen has been exercised, evidence is saved, the
+round-N issues file is written (header + outcome line at minimum, even
+when zero issues), and any harness gap is filed under `issues/`. The
+scheduler routes exec back automatically if the round file is non-empty —
+do not edit application code yourself.

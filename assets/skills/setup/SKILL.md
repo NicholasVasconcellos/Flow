@@ -1,11 +1,6 @@
 ---
 name: setup
-description: >
-  Prepare the project bed: install / configure every tool the plan declares,
-  fetch library docs, write `.env` placeholders + retrieval guides, write
-  `.gitignore`, `Map.md`, `instructions.md`, and `.flow/SetupNotes.md`.
-  Pure preparation — no runtime tool testing.
-  Trigger on: /setup
+description: Prepare a project bed — install / configure declared tools, fetch library docs, write `.env`, `.gitignore`, `Map.md`, `instructions.md`, and `.flow/SetupNotes.md`. No runtime tool testing.
 disable-model-invocation: true
 ---
 
@@ -38,17 +33,15 @@ For each tool extracted in Inputs:
 
 | Kind | Action |
 | --- | --- |
-| **MCP** | Add an entry to `.mcp.json` with the correct server / args. Do **not** call the MCP. |
+| **MCP** | Add an entry to `.mcp.json`. Do **not** call the MCP. |
 | **Plugin** | Install in the agreed location. |
-| **Skill** | Confirm a skill is reachable. Prefer the global skill at `~/.claude/skills/<tool>/SKILL.md`. If none exists, write a short project-level skill at `<projectRoot>/.claude/skills/<tool>/SKILL.md` with the basic entry points the plan implies. Never edit global skills. |
-| **CLI** | Confirm `which <tool>` resolves. If absent, install it (Homebrew, package manager, or the project's documented method). |
-| **Library** | Add to the project manifest (`package.json`, `requirements.txt`, `go.mod`, `Cargo.toml`, etc.) and run the install command for the language. |
+| **Skill** | Prefer the global skill at `~/.claude/skills/<tool>/SKILL.md`. If none exists, write one at `<projectRoot>/.claude/skills/<tool>/SKILL.md`. Never edit global skills. |
+| **CLI** | Confirm `which <tool>` resolves; install if absent. |
+| **Library** | Add to the project manifest and run the language's install command. |
 
-If a tool cannot be installed locally and no offline workaround exists,
-record the gap in `.flow/SetupNotes.md` (Step 6) and continue. Do not
-emit `FLOW_BLOCKED` for an installable-but-not-yet-installed tool —
-write the install command into SetupNotes so the human or the next
-session can complete it.
+If a tool cannot be installed locally, record the install command in
+`.flow/SetupNotes.md` (Step 7) and continue. Do not emit `FLOW_BLOCKED`
+for an installable-but-not-yet-installed tool.
 
 ## Step 2 — Fetch library documentation
 
@@ -60,33 +53,15 @@ website — fetch what the plan's features actually use.
 
 ## Step 3 — Write `.env`
 
-For every service that requires a human-issued credential, write
-`<projectRoot>/.env` with placeholder values and a numbered retrieval
-guide as inline comments. Example:
+For every service requiring a human-issued credential, write
+`<projectRoot>/.env` with an empty placeholder for each variable and a
+short numbered retrieval guide above it as inline comments (where to log
+in, which page, which key to copy). Print the same retrieval steps in
+your final stdout message.
 
-```
-# STRIPE
-# 1. Visit https://dashboard.stripe.com/apikeys
-# 2. Click "Reveal test key" under Standard keys
-# 3. Copy the key starting with `sk_test_...` into the value below
-STRIPE_SECRET_KEY=
-
-# RESEND
-# 1. Sign in at https://resend.com
-# 2. API Keys → Create API Key → name it for this project
-# 3. Copy the key starting with `re_...` into the value below
-RESEND_API_KEY=
-```
-
-Also print the same retrieval steps in your final stdout message so the
-human can pick them up without opening `.env`.
-
-**Do not block the session waiting for keys.** Flow blocks at run time
-when a missing key is actually hit; setup's job is to leave the
-placeholders and the instructions in place.
-
-If a `.env` already exists with real values, do not overwrite — only
-add missing keys with their retrieval guide.
+**Do not block on missing keys.** Flow blocks at runtime when a missing
+key is actually hit. If `.env` already exists with real values, do not
+overwrite — only add missing keys.
 
 ## Step 4 — Write `.gitignore`
 
@@ -152,45 +127,16 @@ Keep the whole file short — every agent loads it on every spawn.
 
 ## Step 7 — Write `.flow/SetupNotes.md`
 
-Output `.flow/SetupNotes.md` summarising what you installed and where
-things live. Downstream agents (especially the first `get-tasks` task,
-which verifies the pipeline end-to-end) read this file. Sections:
+Summarise what you installed and where things live. The first
+`get-tasks` task verifies the pipeline against this file, so include
+these sections:
 
-```markdown
-## Tools installed
-
-MCPs:        <name> — `.mcp.json` entry, skill at <path>
-Plugins:     <name> — installed at <path>
-Skills:      <name> — global at ~/.claude/skills/<name>/  OR  project at .claude/skills/<name>/
-CLIs:        <name> <version>, ...
-
-## Libraries
-
-<name> <version>  — purpose
-
-## Services with credentials
-
-<service>          env var(s): <name>           retrieval steps in `.env`
-
-## How to run the project locally
-
-<exact commands — install, dev server, build, test>
-
-## UI Review tooling
-
-Detected surfaces: <web | iOS | Android | desktop-engine | none>
-Tool to use:       <name>, skill at <path>
-Sample data:       <where realistic test inputs live, or "none yet — first task seeds them">
-
-## Gaps
-
-<anything you could not install + the install command for the human or
-the first task to run>
-```
-
-The `UI Review tooling` and `How to run the project locally` blocks
-are mandatory — the first task that `get-tasks` emits will use them
-to drive end-to-end verification.
+- **Tools installed** — MCPs, plugins, skills (with paths), CLIs (with versions).
+- **Libraries** — `<name> <version> — purpose`, one per line.
+- **Services with credentials** — service, env var name(s), pointer to `.env` retrieval steps.
+- **How to run the project locally** — exact commands (install, dev server, build, test). **Mandatory.**
+- **UI Review tooling** — detected surface(s), tool to use, skill path, where sample data lives. **Mandatory.**
+- **Gaps** — anything you could not install, with the install command for the next session.
 
 ## Allowed write paths
 
@@ -208,26 +154,16 @@ to drive end-to-end verification.
 
 ## What NOT to do
 
-- Do not run any MCP or service ping/health-check call. Installation
-  presence is enough; runtime verification belongs to the first
-  `get-tasks` task.
-- Do not write `CODEBASE.md` (retired in favor of `Map.md` +
-  `instructions.md`).
-- Do not write `.env.example`. Use `.env` with placeholders.
-- Do not extract or write learnings — that's `update-learning`'s job.
-- Do not skip a UI / interactive-testing tool because it "looks
-  optional."
+- Do not run any MCP or service ping / health-check call — runtime
+  verification belongs to the first `get-tasks` task.
+- Do not skip a UI / interactive-testing tool because it "looks optional."
 - Do not edit `~/.claude/skills/` (the global skills directory).
 - Do not block the session waiting for human-issued credentials.
 
-## Termination
+## Done when
 
-When `Map.md`, `instructions.md`, `.gitignore`, `.env`,
+`Map.md`, `instructions.md`, `.gitignore`, `.env`, and
 `.flow/SetupNotes.md` exist, `docs/<lib>/` is populated for every
-declared library, every declared MCP/plugin/skill/CLI is installed and
-configured (or its install command is recorded in SetupNotes), **stop**.
-
-Reserve `FLOW_BLOCKED:` for the genuinely unrecoverable case — a
-required tool that cannot be installed in any way and has no human
-workaround. Most "missing key" or "missing tool" cases should leave a
-note in SetupNotes and proceed.
+declared library, and every declared MCP/plugin/skill/CLI is installed
+or has its install command recorded in SetupNotes. Reserve
+`FLOW_BLOCKED:` for the genuinely unrecoverable case.

@@ -1,9 +1,6 @@
 ---
 name: get-tasks
-description: >
-  Decompose a verified plan into self-contained tasks with dependencies
-  and per-task stage flags. Outputs `.flow/tasks.json`.
-  Trigger on: /get-tasks
+description: Decompose a verified plan into self-contained tasks with dependencies and per-task stage flags. Outputs `.flow/tasks.json`.
 disable-model-invocation: true
 ---
 
@@ -41,7 +38,7 @@ implementing agent runs end-to-end.
 {
   "id": "verify-pipeline-end-to-end",
   "title": "Verify UI-check pipeline end-to-end against SetupNotes",
-  "description": "Read .flow/SetupNotes.md. For every tool listed under \"UI Review tooling\" and \"Tools installed\", launch it against a sample surface (a placeholder route or a minimal scratch view if no real surface exists yet) and confirm: the tool starts, reaches the surface, captures a screenshot or accessibility tree, and writes evidence to .flow/tasks/<taskId>/screenshots/. Do the same for every CLI / library / service the plan declares: invoke each with realistic sample data that mimics real execution (real shapes, real edge cases — not minimal stubs) and confirm the observable outputs the plan expects. Acceptance: every tool, library, and service from SetupNotes is exercised end-to-end with passing evidence; failures are logged to issues/ as harness gaps. This task gates the whole pipeline — every later task assumes these tools work.",
+  "description": "Read .flow/SetupNotes.md. For every tool, library, and service listed, exercise it end-to-end with realistic sample data (real shapes, real edge cases — not minimal stubs) and capture observable evidence under .flow/tasks/<taskId>/screenshots/. Acceptance: every entry in SetupNotes runs against a real surface with passing evidence; failures are logged to issues/ as harness gaps. This task gates the whole pipeline.",
   "contextFiles": [".flow/SetupNotes.md", "instructions.md", "Map.md"],
   "requires": [],
   "hasUI": true,
@@ -104,38 +101,21 @@ before this one so that it can start.
 Each task carries three boolean flags that tell the harness which
 stages to skip. Pick them per the rubric below.
 
-### `hasUI` (default `false`)
+### `hasUI` — default `false`
 
-`true` if acceptance criteria require visual confirmation or
-user-interface interaction.
+Set `true` only when acceptance criteria require visual confirmation or
+UI interaction. Pure backend / data / infra → `false`.
 
-Default `false`. Trivially false for pure backend, data, or infra
-tasks.
+### `hasSpec` — default `true`
 
-### `hasSpec` (default `true`)
+Set `false` for trivially simple tasks: single-file changes, config
+tweaks, dependency bumps, boilerplate scaffolds. Otherwise `true` —
+simple tasks must be explicitly marked simple.
 
-`true` when the task is complex or lengthy enough to benefit from a
-separate spec-author agent writing acceptance tests before
-implementation.
+### `hasCodeReview` — default `true`
 
-Trivially `false` for:
-- single-file changes
-- config tweaks
-- dependency bumps
-- boilerplate scaffolds
-
-Default `true`
-
-— simple tasks must be explicitly marked simple.
-
-### `hasCodeReview` (default `true`)
-
-`true` when the task touches many files or involves architectural
-choices that benefit from a post-implementation cleanup pass for best
-practice / scalability / readability.
-
-Set `false` when task touches **≤2 files with or no
-architectural decisions**. Default `true`.
+Set `false` only when the task touches ≤2 files **and** has no
+architectural decisions. Otherwise `true`.
 
 ## Step 3 — Output
 
@@ -173,24 +153,17 @@ Rules for the JSON output:
 - `description`: full, detailed, self-contained, written as a PM
   handoff to a senior engineer — full context about the feature, how
   it fits into the project, and what done looks like.
-- `contextFiles`: existing-file paths that will be auto-loaded into the
-  implementing agent's prompt as `@path` mentions. Goal: give the agent
-  everything it needs so it never has to grep, glob, or open-ended
-  explore. Use `CODEBASE.md` as the source-of-truth when picking paths.
-  - **Include**: files the task will edit; files whose types/APIs/exports
-    the task imports or calls; one or two exemplar files showing the
-    pattern to mirror (e.g. a sibling component, a similar route handler,
-    an existing test of the same shape); the parent module's index/barrel
-    if symbols are re-exported.
-  - **Exclude**: `CODEBASE.md`, `package.json`, `tsconfig.json`,
-    lockfiles, anything in `node_modules`/`dist`/generated dirs; very
-    large files (>1k lines) unless essential — prefer a smaller
-    adjacent file; files that are only tangentially related ("might be
-    useful").
-  - Be deliberate, not exhaustive. Every extra file consumes the
-    executing agent's context. Empty `[]` is correct for greenfield
-    tasks creating brand-new files with no existing analogues.
-  - List `docs/<lib>/...` files when the task touches that library.
+- `contextFiles`: existing-file paths auto-loaded as `@path` mentions
+  into the implementing agent. Use `Map.md` as the source-of-truth when
+  picking paths. Be deliberate, not exhaustive — every extra file
+  consumes context. Empty `[]` is correct for greenfield tasks.
+  - **Include**: files the task will edit; files whose types/APIs the
+    task imports; one or two exemplar files showing the pattern to
+    mirror; the parent module's barrel if symbols are re-exported;
+    `docs/<lib>/...` files for libraries the task touches.
+  - **Exclude**: `Map.md`, `package.json`, `tsconfig.json`, lockfiles,
+    anything in `node_modules`/`dist`/generated dirs; >1k-line files
+    unless essential; tangentially-related files.
 - `requires`: references `id` strings exactly (not titles); use `[]` if
   there are no dependencies. Only list direct dependencies — they
   should follow naturally from the logical flow of the task list.
@@ -206,7 +179,7 @@ your turn.
 ## What NOT to do
 
 - Do not write any code.
-- Do not generate or refresh `CODEBASE.md` — setup owns it.
+- Do not generate or refresh `Map.md` — setup owns it.
 - Do not fetch library documentation — setup owns `docs/`.
 - Do not append a "missing MCPs / manual steps" checklist — setup
   already verified the environment and blocked if anything was missing.
