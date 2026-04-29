@@ -1,0 +1,108 @@
+{
+  "SERVER_TO_CLIENT_EXAMPLES": [
+    {
+      "type": "hello",
+      "version": "0.1.0",
+      "project": {
+        "name": "pkmn-t8",
+        "path": "/Users/nicholas/Developer/pkmn-t8"
+      }
+    },
+    {
+      "type": "project.list",
+      "projects": [
+        {
+          "name": "pkmn-t8",
+          "path": "/Users/nicholas/Developer/pkmn-t8",
+          "status": "running",
+          "numTasks": 100
+        }
+      ]
+    },
+    {
+      "type": "project.state",
+      "project": {
+        "name": "pkmn-t8",
+        "tasks": [],
+        "sessions": []
+      }
+    },
+    {
+      "type": "task.upsert",
+      "task": {
+        "id": "example-task-id",
+        "status": "running",
+        "stage": "exec",
+        "hasUI": true,
+        "hasSpec": true
+      }
+    },
+    {
+      "type": "task.removed",
+      "taskId": "example-task-id"
+    },
+    {
+      "type": "dag",
+      "nodes": [
+        { "id": "task-a", "status": "done" },
+        { "id": "task-b", "status": "ready" }
+      ],
+      "edges": [
+        { "from": "task-a", "to": "task-b" }
+      ]
+    },
+    {
+      "type": "session.started",
+      "session": {
+        "id": "sess-123",
+        "taskId": "example-task-id",
+        "status": "running",
+        "stage": "setup"
+      }
+    },
+    {
+      "type": "session.event",
+      "event": {
+        "kind": "assistant_text",
+        "payload": "I am working on this task..."
+      }
+    },
+    {
+      "type": "session.ended",
+      "session": {
+        "id": "sess-123",
+        "status": "succeeded"
+      }
+    },
+    {
+      "type": "notification",
+      "notification": {
+        "id": "notif-456",
+        "message": "Task completed successfully",
+        "level": "info"
+      }
+    },
+    {
+      "type": "error",
+      "message": "Invalid command received",
+      "requestId": "req-789"
+    }
+  ],
+  "CLIENT_TO_SERVER_EXAMPLES": [
+    { "type": "project.list" },
+    { "type": "project.open", "name": "pkmn-t8" },
+    { "type": "project.create", "name": "new-project", "path": "/path/to/project" },
+    { "type": "project.close" },
+    { "type": "run.once", "taskId": "example-task-id" },
+    { "type": "run.allOnce" },
+    { "type": "run.all" },
+    { "type": "run.cancel" },
+    { "type": "task.retry", "taskId": "example-task-id" },
+    { "type": "task.cancel", "taskId": "example-task-id" },
+    { "type": "task.resume", "taskId": "example-task-id" },
+    { "type": "session.replay", "sessionId": "sess-123" },
+    { "type": "notification.ack", "notificationId": "notif-456" },
+    { "type": "config.get" },
+    { "type": "config.update", "config": { "thinkingMode": "enabled" } }
+  ]
+}
