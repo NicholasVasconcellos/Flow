@@ -1,8 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { TaskDefSchema, TasksFileSchema, type Config, type TaskDef } from "../src/types.js";
-import { stagesFor, stagesForTask, type AgentStage } from "../src/scheduler.js";
+import {
+  TaskDefSchema,
+  TasksFileSchema,
+  type Config,
+  type TaskDef,
+  type TaskStage,
+} from "../src/types.js";
+import {
+  resumeIndex,
+  stagesFor,
+  stagesForTask,
+  type AgentStage,
+} from "../src/scheduler.js";
 import { defaultConfig } from "../src/config.js";
 
 // ---------------------------------------------------------------------------
@@ -170,4 +181,85 @@ test("stagesForTask: legacy task (parsed via schema) yields default stage set", 
     "update-learning",
   ];
   assert.deepEqual(stages, expected);
+});
+
+// ---------------------------------------------------------------------------
+// resumeIndex
+// ---------------------------------------------------------------------------
+
+test("resumeIndex: stage present in filtered list returns its index", () => {
+  const cfg = fullConfig();
+  const canonical = stagesFor(cfg);
+  const stages = stagesForTask(cfg, mkTask({ hasUI: true }));
+  assert.deepEqual(resumeIndex(canonical, stages, "code_review"), {
+    index: stages.indexOf("code_review"),
+    unknownStage: false,
+  });
+});
+
+test("resumeIndex: filtered-out exec_ui_check advances to code_review", () => {
+  const cfg = fullConfig();
+  const canonical = stagesFor(cfg);
+  // hasUI=false drops both UI-check stages.
+  const stages = stagesForTask(cfg, mkTask({ hasUI: false }));
+  assert.ok(!stages.includes("exec_ui_check"));
+  assert.deepEqual(resumeIndex(canonical, stages, "exec_ui_check"), {
+    index: stages.indexOf("code_review"),
+    unknownStage: false,
+  });
+});
+
+test("resumeIndex: filtered-out code_review_ui_check advances to documentation", () => {
+  const cfg = fullConfig();
+  const canonical = stagesFor(cfg);
+  const stages = stagesForTask(cfg, mkTask({ hasUI: false }));
+  assert.ok(!stages.includes("code_review_ui_check"));
+  assert.deepEqual(resumeIndex(canonical, stages, "code_review_ui_check"), {
+    index: stages.indexOf("documentation"),
+    unknownStage: false,
+  });
+});
+
+test("resumeIndex: filtered-out final stage with no successor → stages.length", () => {
+  const canonical: AgentStage[] = ["spec", "exec", "documentation"];
+  const stages: AgentStage[] = ["spec", "exec"];
+  assert.deepEqual(resumeIndex(canonical, stages, "documentation"), {
+    index: stages.length,
+    unknownStage: false,
+  });
+});
+
+test("resumeIndex: terminal stages return stages.length", () => {
+  const cfg = fullConfig();
+  const canonical = stagesFor(cfg);
+  const stages = stagesForTask(cfg, mkTask());
+  assert.deepEqual(resumeIndex(canonical, stages, "done"), {
+    index: stages.length,
+    unknownStage: false,
+  });
+  assert.deepEqual(resumeIndex(canonical, stages, "merged"), {
+    index: stages.length,
+    unknownStage: false,
+  });
+});
+
+test("resumeIndex: exec is always present (sanity)", () => {
+  const cfg = fullConfig();
+  const canonical = stagesFor(cfg);
+  const stages = stagesForTask(cfg, mkTask());
+  assert.deepEqual(resumeIndex(canonical, stages, "exec"), {
+    index: stages.indexOf("exec"),
+    unknownStage: false,
+  });
+});
+
+test("resumeIndex: unknown stage returns 0 with unknownStage=true", () => {
+  const cfg = fullConfig();
+  const canonical = stagesFor(cfg);
+  const stages = stagesForTask(cfg, mkTask());
+  const bogus = "totally-not-a-stage" as TaskStage;
+  assert.deepEqual(resumeIndex(canonical, stages, bogus), {
+    index: 0,
+    unknownStage: true,
+  });
 });

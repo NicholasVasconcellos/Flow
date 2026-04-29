@@ -62,8 +62,9 @@ export function stagesFor(config: Config): AgentStage[] {
  *  - `hasSpec=false` drops `spec`
  *  - `hasUI=false` drops both UI-check stages
  *  - `hasCodeReview=false` drops `code_review`
- *  Filter preserves order, so `stages.indexOf(resumeStage)` continues to
- *  work for paused/resumed tasks. */
+ *  Filter preserves order; resume-index logic in `resumeIndex` handles the
+ *  case where a task's saved stage was filtered out by a flag change after
+ *  it paused. */
 export function stagesForTask(config: Config, task: TaskDef): AgentStage[] {
   return stagesFor(config).filter((s) => {
     if (s === "spec" && task.hasSpec === false) return false;
@@ -71,6 +72,35 @@ export function stagesForTask(config: Config, task: TaskDef): AgentStage[] {
     if (s === "code_review" && task.hasCodeReview === false) return false;
     return true;
   });
+}
+
+/** Where a resumed task should re-enter its filtered stage list.
+ *
+ *  - "done"/"merged"            → past the last agent stage (skip loop, go to merge)
+ *  - stage in `stages`          → its index
+ *  - stage in `canonical` only  → first stage in `stages` whose canonical
+ *                                 position ≥ original's (i.e. advance to the
+ *                                 next valid stage; never rewind)
+ *  - stage in neither           → 0, with `unknownStage: true` so the caller
+ *                                 can warn rather than restart silently
+ */
+export function resumeIndex(
+  canonical: AgentStage[],
+  stages: AgentStage[],
+  taskStage: TaskStage,
+): { index: number; unknownStage: boolean } {
+  if (taskStage === "done" || taskStage === "merged") {
+    return { index: stages.length, unknownStage: false };
+  }
+  const direct = stages.indexOf(taskStage as AgentStage);
+  if (direct >= 0) return { index: direct, unknownStage: false };
+
+  const canonIdx = canonical.indexOf(taskStage as AgentStage);
+  if (canonIdx >= 0) {
+    const next = stages.findIndex((s) => canonical.indexOf(s) >= canonIdx);
+    return { index: next < 0 ? stages.length : next, unknownStage: false };
+  }
+  return { index: 0, unknownStage: true };
 }
 
 export function stageSkill(stage: AgentStage): string {
@@ -414,16 +444,21 @@ export class Scheduler {
       task0.startedAt = nowIso();
     }
 
+    const canonical = stagesFor(this.config);
     const stages = stagesForTask(this.config, task0);
-
     const resumeStage: TaskStage = task0.stage ?? "spec";
-    let startIndex = stages.indexOf(resumeStage as AgentStage);
-    if (startIndex < 0) {
-      if (resumeStage === "done" || resumeStage === "merged") {
-        startIndex = stages.length;
-      } else {
-        startIndex = 0;
-      }
+    const { index: startIndex, unknownStage } = resumeIndex(
+      canonical,
+      stages,
+      resumeStage,
+    );
+    if (unknownStage) {
+      await this.emitNotification({
+        taskId,
+        severity: "warn",
+        title: "Resume: unknown stage",
+        body: `Task was paused at stage "${resumeStage}", which is not part of the configured pipeline. Restarting from "${stages[0] ?? "<empty>"}".`,
+      });
     }
 
     let errorAddendum = "";

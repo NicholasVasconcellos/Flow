@@ -16,6 +16,7 @@ import type {
   Session,
   TaskDef,
   TaskRuntime,
+  TaskStage,
 } from "../src/types.js";
 import type { AgentRunner, SpawnArgs } from "../src/agent.js";
 import type { GitManager, CommitMessage } from "../src/git.js";
@@ -1056,3 +1057,83 @@ test(
     assert.equal(t.transientRetries, 0);
   },
 );
+
+// ---------------------------------------------------------------------------
+// Resume from a stage that was filtered out by a flag change
+// ---------------------------------------------------------------------------
+
+test(
+  "resume: paused at a now-filtered-out stage advances to next valid stage, not stage 0",
+  { timeout: 10000 },
+  async () => {
+    // hasUI=false drops both UI-check stages. Persist a paused state at
+    // exec_ui_check — a stage that no longer exists in this task's filtered
+    // list — and verify resume jumps to code_review (the successor) rather
+    // than rewinding to spec.
+    const h = await makeHarness({
+      taskDefs: [mkTaskDef("A", { hasUI: false })],
+    });
+    const a = h.state.getTask("A")!;
+    a.status = "paused";
+    a.stage = "exec_ui_check";
+    a.startedAt = nowIsoLocal();
+    h.state.upsertTask(a);
+    await h.state.save();
+
+    h.notifications.length = 0;
+    h.agent.calls.length = 0;
+
+    await h.scheduler.retryTask("A");
+
+    const stagesSeen = h.agent.calls.map((c) => c.stage);
+    assert.equal(
+      stagesSeen[0],
+      "code_review",
+      `expected first stage after resume to be code_review, got ${stagesSeen[0]}`,
+    );
+    assert.ok(!stagesSeen.includes("spec"), "must not rewind to spec");
+    assert.ok(
+      !stagesSeen.includes("exec"),
+      "must not rewind to exec either",
+    );
+
+    const warnNotifs = h.notifications.filter((n) => n.severity === "warn");
+    assert.equal(
+      warnNotifs.length,
+      0,
+      "filtered-out is a clean case, no warn expected",
+    );
+  },
+);
+
+test(
+  "resume: paused at an unknown stage emits warn notification and restarts from first stage",
+  { timeout: 10000 },
+  async () => {
+    const h = await makeHarness({ taskDefs: [mkTaskDef("A")] });
+    const a = h.state.getTask("A")!;
+    a.status = "paused";
+    a.stage = "totally-not-a-real-stage" as TaskStage;
+    a.startedAt = nowIsoLocal();
+    h.state.upsertTask(a);
+    await h.state.save();
+
+    h.notifications.length = 0;
+    h.agent.calls.length = 0;
+
+    await h.scheduler.retryTask("A");
+
+    const stagesSeen = h.agent.calls.map((c) => c.stage);
+    assert.equal(stagesSeen[0], "spec", "unknown stage should restart from spec");
+
+    const warnNotifs = h.notifications.filter(
+      (n) => n.severity === "warn" && n.title === "Resume: unknown stage",
+    );
+    assert.equal(warnNotifs.length, 1, "expected exactly one unknown-stage warn");
+    assert.match(warnNotifs[0]!.body, /totally-not-a-real-stage/);
+  },
+);
+
+function nowIsoLocal(): string {
+  return new Date().toISOString();
+}
