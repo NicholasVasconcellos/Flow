@@ -1,0 +1,390 @@
+/* Flow — Orchestrator UI
+   Dark theme inspired by Claude Code docs */
+
+:root {
+  /* Background scale — from deepest to elevated surfaces */
+  --bg-0: #141413;        /* page background */
+  --bg-1: #1a1a19;        /* panels */
+  --bg-2: #1f1f1e;        /* elevated / inputs */
+  --bg-3: #262624;        /* hover / nodes */
+  --bg-4: #2d2d2b;        /* active / selected */
+
+  /* Borders */
+  --border-1: #2a2a28;    /* subtle */
+  --border-2: #363633;    /* default */
+  --border-3: #45453f;    /* strong */
+
+  /* Text */
+  --text-1: #f5f4ee;      /* primary, warm off-white */
+  --text-2: #c2c0b6;      /* secondary */
+  --text-3: #8a887e;      /* tertiary / muted */
+  --text-4: #5e5c54;      /* disabled / hint */
+
+  /* Brand */
+  --accent: #d97757;      /* Claude orange */
+  --accent-soft: #c96a4c;
+  --accent-bg: #2a1d17;
+
+  /* Status */
+  --ok: #7cc47f;
+  --ok-bg: #1a2620;
+  --warn: #e3b341;
+  --warn-bg: #2a2418;
+  --err: #e5806b;
+  --err-bg: #2a1a17;
+  --info: #7aa7e0;
+  --info-bg: #17202a;
+  --purple: #b788e0;
+  --purple-bg: #241c2e;
+
+  /* Token scale for context donuts */
+  --ctx-green: #7cc47f;
+  --ctx-yellow: #e3b341;
+  --ctx-red: #e5806b;
+
+  /* Type */
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-serif: "Tiempos Text", "Iowan Old Style", Georgia, serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* Radii */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+
+  /* Shadows */
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.3), 0 1px 2px rgba(0,0,0,0.2);
+  --shadow-lg: 0 12px 32px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.3);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg-0);
+  color: var(--text-1);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root { height: 100%; }
+
+/* Scrollbars */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 10px; border: 2px solid transparent; background-clip: content-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--border-3); background-clip: content-box; border: 2px solid transparent; }
+
+/* Type utility */
+.mono { font-family: var(--font-mono); }
+.serif { font-family: var(--font-serif); }
+
+/* Primitives */
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+input, textarea, select {
+  font: inherit;
+  color: inherit;
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  padding: 7px 10px;
+  outline: none;
+}
+input:focus, textarea:focus, select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.15);
+}
+
+/* Top bar */
+.topbar {
+  height: 44px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border-1);
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  gap: 14px;
+  flex-shrink: 0;
+}
+.topbar .brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.topbar .brand-mark {
+  width: 20px; height: 20px;
+  border-radius: 5px;
+  background: var(--accent);
+  display: grid;
+  place-items: center;
+  color: #1a1a19;
+  font-weight: 700;
+  font-size: 12px;
+}
+.topbar .crumb {
+  color: var(--text-3);
+  font-size: 13px;
+}
+.topbar .crumb .sep { margin: 0 8px; color: var(--text-4); }
+.topbar .crumb .cur { color: var(--text-1); font-weight: 500; }
+.topbar .spacer { flex: 1; }
+.topbar .status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+  padding: 3px 9px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+}
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.dot.ok { background: var(--ok); box-shadow: 0 0 0 3px rgba(124,196,127,0.15); }
+.dot.warn { background: var(--warn); }
+.dot.err { background: var(--err); }
+.dot.info { background: var(--info); }
+.dot.idle { background: var(--text-4); }
+
+/* Button */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-2);
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-size: 12.5px;
+  font-weight: 500;
+  transition: background 0.12s, border-color 0.12s;
+}
+.btn:hover { background: var(--bg-3); border-color: var(--border-3); }
+.btn.primary {
+  background: var(--accent);
+  color: #1a1a19;
+  border-color: var(--accent);
+}
+.btn.primary:hover { background: var(--accent-soft); border-color: var(--accent-soft); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); }
+.btn.ghost:hover { background: var(--bg-2); color: var(--text-1); }
+.btn.sm { padding: 3px 8px; font-size: 11.5px; }
+
+/* Pill / badge */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  color: var(--text-2);
+  border: 1px solid var(--border-2);
+  letter-spacing: 0.01em;
+}
+.badge.ok { color: var(--ok); background: var(--ok-bg); border-color: rgba(124,196,127,0.2); }
+.badge.warn { color: var(--warn); background: var(--warn-bg); border-color: rgba(227,179,65,0.22); }
+.badge.err { color: var(--err); background: var(--err-bg); border-color: rgba(229,128,107,0.22); }
+.badge.info { color: var(--info); background: var(--info-bg); border-color: rgba(122,167,224,0.22); }
+.badge.purple { color: var(--purple); background: var(--purple-bg); border-color: rgba(183,136,224,0.22); }
+.badge.accent { color: var(--accent); background: var(--accent-bg); border-color: rgba(217,119,87,0.28); }
+
+/* Panel chrome */
+.panel {
+  background: var(--bg-1);
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-lg);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border-1);
+  background: var(--bg-1);
+  flex-shrink: 0;
+  min-height: 38px;
+  container-type: inline-size;
+  container-name: panelhdr;
+}
+.panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.panel-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+.panel-actions {
+  flex-shrink: 0;
+}
+/* Progressive collapse: as the panel header narrows, drop items from the
+   left first so the rightmost action (the X close button) is the last to go. */
+@container panelhdr (max-width: 220px) {
+  .panel-header > .ic-leader { display: none; }
+}
+@container panelhdr (max-width: 170px) {
+  .panel-title .drop-at-sm { display: none; }
+}
+@container panelhdr (max-width: 120px) {
+  .panel-title .drop-at-xs { display: none; }
+}
+.panel-title .count {
+  font-size: 11px;
+  color: var(--text-3);
+  background: var(--bg-3);
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+.icon-btn {
+  width: 24px; height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  color: var(--text-3);
+  transition: background 0.1s, color 0.1s;
+}
+.icon-btn:hover { background: var(--bg-3); color: var(--text-1); }
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Collapsed panel */
+.panel.collapsed .panel-body { display: none; }
+.panel.collapsed {
+  flex: 0 0 auto !important;
+  /* Ensure the collapsed panel always shows its toggle + leader icon,
+     no matter how narrow/short its parent pane gets. */
+  min-width: 32px;
+  min-height: 28px;
+}
+.panel.collapsed .panel-header {
+  /* Keep the header itself from shrinking below a usable size so the
+     collapse toggle (and leader icon, if present) remain visible. */
+  min-width: 32px;
+  min-height: 28px;
+}
+
+/* Collapsed → thin ribbon (used when the panel collapses itself) */
+.panel.ribbon {
+  flex: 0 0 auto !important;
+}
+.panel.ribbon .panel-header {
+  border-bottom: none;
+  padding: 4px 8px;
+  min-height: 28px;
+  gap: 6px;
+}
+.panel.ribbon .panel-title {
+  font-size: 11px;
+}
+.panel.ribbon .panel-collapse-toggle {
+  width: 18px;
+  height: 18px;
+}
+
+/* When the parent flex container is a column (rows layout), the ribbon is a
+   thin horizontal strip — already naturally thin via min-height. When parent
+   is a row (columns layout), force a narrow width so it shows just the
+   collapse button + title vertically-centered without consuming pane width. */
+.panel.ribbon { min-height: 28px; }
+
+.panel-collapse-toggle {
+  color: var(--text-3);
+}
+.panel-collapse-toggle:hover {
+  color: var(--text-1);
+  background: var(--bg-3);
+}
+
+/* Resize handle */
+.resizer {
+  background: transparent;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 5;
+  transition: background 0.15s;
+}
+.resizer.v { width: 6px; cursor: col-resize; }
+.resizer.h { height: 6px; cursor: row-resize; }
+.resizer:hover, .resizer.dragging { background: rgba(217,119,87,0.25); }
+
+/* SVG icon sizing */
+.ic { width: 14px; height: 14px; display: inline-block; flex-shrink: 0; }
+.ic-sm { width: 12px; height: 12px; }
+.ic-lg { width: 16px; height: 16px; }
+
+/* Active session pulse */
+@keyframes flowPulse {
+  0%, 100% { box-shadow: 0 0 0 3px color-mix(in oklch, var(--ok) 22%, transparent); }
+  50%      { box-shadow: 0 0 0 5px color-mix(in oklch, var(--ok) 8%, transparent); }
+}
+
+/* Flash-focus: briefly highlight a log column when re-opened from the sessions list */
+@keyframes flowFlashFocus {
+  0%   { box-shadow: 0 0 0 0 color-mix(in oklch, var(--accent) 0%, transparent); border-color: var(--border-1); }
+  15%  { box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 55%, transparent); border-color: var(--accent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--accent) 0%, transparent); border-color: var(--border-1); }
+}
+.flash-focus { animation: flowFlashFocus 900ms ease-out 1; }
+
+/* Focus ring */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 3px; }
+
+/* Kbd */
+kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-3);
+  color: var(--text-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border-2);
+  border-bottom-width: 2px;
+}
