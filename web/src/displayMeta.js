@@ -11,7 +11,9 @@ export const STAGES = {
   review:      { label: "Review",      color: "#b788e0" },
   "ui-review": { label: "UI Review",   color: "#b788e0" },
   merge:       { label: "Merge",       color: "#9aa3b2" },
+  merged:      { label: "Merged",      color: "#7cc47f" },
   document:    { label: "Document",    color: "#7cc47f" },
+  "update-learning": { label: "Learning", color: "#7cc47f" },
   setup:       { label: "Setup",       color: "#9aa3b2" },
 };
 
@@ -24,6 +26,8 @@ export const STATUS_META = {
   paused:            { label: "Paused",            color: "var(--warn)",   dot: "warn" },
   queued:            { label: "Queued",            color: "var(--text-3)", dot: "idle" },
   failed:            { label: "Failed",            color: "var(--err)",    dot: "err"  },
+  merged:            { label: "Merged",            color: "var(--ok)",     dot: "ok"   },
+  pending:           { label: "Pending",           color: "var(--text-3)", dot: "idle" },
   "merge-resolve":   { label: "Merge: resolve",    color: "var(--warn)",   dot: "warn" },
   "merge-verify":    { label: "Merge: verify",     color: "var(--info)",   dot: "info" },
   "commit-recovery": { label: "Recovering commit", color: "var(--warn)",   dot: "warn" },

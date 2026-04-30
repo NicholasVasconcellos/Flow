@@ -423,8 +423,8 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, showAll, onT
         {visibleTasks.map(t => {
           const pos = positions[t.id];
           if (!pos) return null;
-          const meta = window.FLOW_DATA.STATUS_META[t.status];
-          const phaseMeta = window.FLOW_DATA.PHASES[t.phase];
+          const meta = window.FLOW_DATA.STATUS_META[t.status] || { label: t.status || "unknown", color: "var(--text-3)", dot: "idle" };
+          const phaseMeta = window.FLOW_DATA.PHASES[t.phase] || { label: t.phase || "unknown", color: "var(--text-3)" };
           const isSel = selectedId === t.id;
           const isHov = hoveredId === t.id;
           const off = offsets[t.id] || { dx: 0, dy: 0 };
