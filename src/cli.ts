@@ -2,6 +2,7 @@
 import path from "node:path";
 import process from "node:process";
 import { promises as fs } from "node:fs";
+import { spawn as spawnProcess } from "node:child_process";
 
 import { Command } from "commander";
 import chalk from "chalk";
@@ -10,11 +11,20 @@ import ora from "ora";
 import { createFlow, initFlowProject } from "./flow.js";
 import { Paths } from "./paths.js";
 import { loadConfig, mergeConfigPatch, saveConfig } from "./config.js";
-import { readJsonlLines } from "./atomic.js";
+import { readJsonlLines, readJsonIfExists } from "./atomic.js";
 import { topoSort } from "./dag.js";
 import { startWsServer, type WsServer } from "./ws.js";
 import { acquireLock } from "./orchestratorLock.js";
-import { runOvernight } from "./overnight.js";
+import {
+  EXIT_FATAL,
+  EXIT_LOCK_CONFLICT,
+  runOvernight,
+  type OvernightOutcome,
+} from "./overnight.js";
+import {
+  superviseOvernight,
+  type SupervisedChild,
+} from "./overnightSupervisor.js";
 import type { Flow } from "./flow.js";
 import type { Config, SessionEvent, TaskRuntime } from "./types.js";
 
@@ -370,6 +380,7 @@ interface AcquiredCliLock {
 async function acquireCliLock(
   flow: Flow,
   command: string,
+  opts: { onConflictExitCode?: number } = {},
 ): Promise<AcquiredCliLock> {
   const paths = flow.getPaths();
   const result = await acquireLock(paths, command);
@@ -381,7 +392,7 @@ async function acquireCliLock(
         `orchestrator already running (pid ${c.pid}, host ${c.host}, command ${c.command}) — submit via WS or wait`,
       ),
     );
-    process.exit(1);
+    process.exit(opts.onConflictExitCode ?? 1);
   }
 
   const acquired = result;
@@ -693,6 +704,142 @@ program
     },
   );
 
+async function runOvernightWorker(opts: { at?: string }): Promise<void> {
+  const flow = await createFlow({ projectPath: process.cwd() });
+  installSigintHandler(flow);
+  const lock = await acquireCliLock(flow, "overnight", {
+    onConflictExitCode: EXIT_LOCK_CONFLICT,
+  });
+  const unsubscribe = subscribeToFlow(flow);
+  try {
+    await flow.ensureTasksLoaded();
+    const flowDir = flow.getPaths().flowDir;
+    const result = await runOvernight(
+      {
+        flow,
+        logFilePath: path.join(flowDir, "overnight.log"),
+        lastResultPath: path.join(flowDir, "overnight.last-result.json"),
+      },
+      opts.at ? { atTime: opts.at } : {},
+    );
+    if (result.kind === "fatal") {
+      process.exitCode = EXIT_FATAL;
+    }
+    // result.kind === "needs-review" exits 0: the run drained cleanly,
+    // remaining work is parked behind human review, not a failure.
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(chalk.red(`overnight failed: ${(err as Error).message}`));
+    process.exitCode = 1;
+  } finally {
+    unsubscribe();
+    flow.stop();
+    await lock.release();
+  }
+}
+
+function stripAtFlag(argv: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i]!;
+    if (a === "--at") {
+      i += 1; // also drop the value
+      continue;
+    }
+    if (a.startsWith("--at=")) continue;
+    out.push(a);
+  }
+  return out;
+}
+
+async function runOvernightSupervisor(): Promise<void> {
+  const flowDir = path.join(process.cwd(), ".flow");
+  await fs.mkdir(flowDir, { recursive: true });
+  const logFilePath = path.join(flowDir, "overnight.log");
+  const lastResultPath = path.join(flowDir, "overnight.last-result.json");
+
+  const argvFirst = process.argv.slice(2);
+  const argvRestart = stripAtFlag(argvFirst);
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    FLOW_OVERNIGHT_CHILD: "1",
+  };
+
+  const spawnChild = (
+    argv: string[],
+    env: NodeJS.ProcessEnv,
+  ): SupervisedChild => {
+    const cp = spawnProcess(
+      process.execPath,
+      [...process.execArgv, process.argv[1]!, ...argv],
+      { env, stdio: "inherit" },
+    );
+    const exited = new Promise<{
+      code: number | null;
+      signal: NodeJS.Signals | null;
+    }>((resolve) => {
+      cp.once("exit", (code, signal) => resolve({ code, signal }));
+      cp.once("error", () => resolve({ code: 1, signal: null }));
+    });
+    return {
+      pid: cp.pid ?? -1,
+      kill: (sig) => {
+        try {
+          cp.kill(sig);
+        } catch {
+          // best-effort
+        }
+      },
+      exited,
+    };
+  };
+
+  const appendLog = async (line: string): Promise<void> => {
+    // eslint-disable-next-line no-console
+    console.log(line);
+    try {
+      await fs.appendFile(logFilePath, line + "\n");
+    } catch {
+      // disk errors must not tear down supervision
+    }
+  };
+
+  const onSignal = (
+    handler: (sig: "SIGINT" | "SIGTERM") => void,
+  ): (() => void) => {
+    const sigint = (): void => handler("SIGINT");
+    const sigterm = (): void => handler("SIGTERM");
+    process.on("SIGINT", sigint);
+    process.on("SIGTERM", sigterm);
+    return () => {
+      process.removeListener("SIGINT", sigint);
+      process.removeListener("SIGTERM", sigterm);
+    };
+  };
+
+  const result = await superviseOvernight(
+    {
+      spawnChild,
+      now: () => Date.now(),
+      sleep: (ms) =>
+        new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, ms);
+          t.unref?.();
+        }),
+      readLastResult: () =>
+        readJsonIfExists<OvernightOutcome>(lastResultPath),
+      appendLog,
+      onSignal,
+    },
+    {
+      argvFirst,
+      argvRestart,
+      env: childEnv,
+    },
+  );
+  process.exit(result.exitCode);
+}
+
 program
   .command("overnight")
   .description(
@@ -710,34 +857,12 @@ program
       );
       process.exit(2);
     }
-    const flow = await createFlow({ projectPath: process.cwd() });
-    installSigintHandler(flow);
-    const lock = await acquireCliLock(flow, "overnight");
-    const unsubscribe = subscribeToFlow(flow);
-    try {
-      await flow.ensureTasksLoaded();
-      const logFilePath = path.join(
-        flow.getPaths().flowDir,
-        "overnight.log",
-      );
-      const result = await runOvernight(
-        { flow, logFilePath },
-        opts.at ? { atTime: opts.at } : {},
-      );
-      if (result.kind === "fatal") {
-        process.exitCode = 1;
-      }
-      // result.kind === "needs-review" exits 0: the run drained cleanly,
-      // remaining work is parked behind human review, not a failure.
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error(chalk.red(`overnight failed: ${(err as Error).message}`));
-      process.exitCode = 1;
-    } finally {
-      unsubscribe();
-      flow.stop();
-      await lock.release();
+
+    if (process.env.FLOW_OVERNIGHT_CHILD === "1") {
+      await runOvernightWorker(opts);
+      return;
     }
+    await runOvernightSupervisor();
   });
 
 program
