@@ -572,3 +572,60 @@ test("scenario F: transient pause resolves, then surviving review pause exits ne
   assert.match(log, /cycle=1 result=rate_limited/);
   assert.match(log, /cycle=2 result=needs_review review=1 merged=1/);
 });
+
+test("scenario G: real fatal coexisting with review pause still exits fatal, count excludes reviews", async () => {
+  const dir = await mkTmp();
+  const startMs = new Date("2026-04-29T22:00:00.000Z").getTime();
+  const clock = makeFakeClock(startMs);
+
+  const tFatal = makeTask({
+    id: "T1",
+    status: "paused",
+    currentSessionId: "S1",
+    sessionIds: ["S1"],
+  });
+  const tReview = makeTask({
+    id: "T2",
+    status: "paused",
+    currentSessionId: "S2",
+    sessionIds: ["S2"],
+  });
+  const sFatal = makeSession({
+    id: "S1",
+    taskId: "T1",
+    status: "failed",
+    transientError: false,
+    error: "agent crashed",
+  });
+  const sReview = makeSession({
+    id: "S2",
+    taskId: "T2",
+    status: "succeeded",
+    reviewRequested: { reason: "verify XP curve" },
+  });
+
+  const fake = makeFakeFlow({
+    snapshots: [{ tasks: [tFatal, tReview], sessions: [sFatal, sReview] }],
+  });
+
+  const result = await runOvernight(
+    {
+      flow: fake.flow,
+      logFilePath: path.join(dir, "overnight.log"),
+      print: () => {},
+      now: clock.now,
+      sleep: clock.sleep,
+    },
+    {},
+  );
+
+  assert.equal(result.kind, "fatal");
+  if (result.kind === "fatal") {
+    // Fatal count must NOT include the review-pause.
+    assert.equal(result.fatalCount, 1);
+  }
+  assert.equal(fake.runAllCalls, 1);
+  assert.equal(clock.now(), startMs); // no sleep
+  const log = await fs.readFile(path.join(dir, "overnight.log"), "utf8");
+  assert.match(log, /result=fatal merged=0 fatal=1 review=1 transient=0/);
+});
