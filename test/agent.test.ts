@@ -299,11 +299,9 @@ test("spawnAgent happy path: emits events, writes JSONL, computes cost", async (
     ],
     exitCode: 0,
   });
-  // Context probe — return a line with "42%"
-  spawnerHandle.queue.push({
-    stdout: [JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Context: 42%" }] } })],
-    exitCode: 0,
-  });
+  // No probe stub queued: the in-stream `usage` line above populates
+  // contextPercentage during the run, so the post-run fallback probe is
+  // skipped (see `observedInStream` gate in agent.ts).
 
   const started: Session[] = [];
   const events: SessionEvent[] = [];
@@ -353,10 +351,10 @@ test("spawnAgent happy path: emits events, writes JSONL, computes cost", async (
   );
   assert.equal(meta.status, "succeeded");
 
-  // Context probe fired as second spawner call.
-  assert.equal(spawnerHandle.calls.length, 2);
-  assert.ok(spawnerHandle.calls[1]!.args.includes("/context"));
-  assert.equal(session.contextPercentage, 42);
+  // Probe was skipped: the in-stream usage event populated contextPercentage.
+  // 3100 (input + cache_read + cache_create) / 200000 = 1.55% → rounds to 2.
+  assert.equal(spawnerHandle.calls.length, 1);
+  assert.equal(session.contextPercentage, 2);
 });
 
 // ---------------------------------------------------------------------------
@@ -495,6 +493,127 @@ test("context probe no-op when spawner has no further script; doesn't throw", as
 
   assert.equal(session.status, "succeeded");
   assert.equal(session.contextPercentage, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// In-stream contextPercentage population
+// ---------------------------------------------------------------------------
+
+test("populates contextPercentage from in-stream usage", async () => {
+  const root = await mkTmp();
+  const spawnerHandle = makeFakeSpawner();
+  const { runner, paths, bus } = makeRunner(root, spawnerHandle);
+  await writeSkill(paths, "exec", "skill");
+
+  // 60_000 + 40_000 = 100_000 → 100_000 / 200_000 = 50%.
+  spawnerHandle.queue.push({
+    stdout: [
+      JSON.stringify({ type: "system", subtype: "init" }),
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{ type: "text", text: "hi" }],
+          usage: {
+            input_tokens: 60_000,
+            cache_read_input_tokens: 40_000,
+          },
+        },
+      }),
+    ],
+    exitCode: 0,
+  });
+
+  const updated: Session[] = [];
+  bus.on("session.updated", ({ session }) => updated.push(session));
+
+  const session = await runner.spawnAgent({
+    taskId: "T-ctx-instream",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  assert.equal(session.contextPercentage, 50);
+  // At least one mid-run session.updated carried the contextPercentage.
+  const sawCtxUpdate = updated.some((s) => s.contextPercentage === 50);
+  assert.ok(sawCtxUpdate, "expected session.updated event with contextPercentage=50");
+});
+
+test("skips fallback probe when in-stream usage seen", async () => {
+  const root = await mkTmp();
+  const spawnerHandle = makeFakeSpawner();
+  const { runner, paths } = makeRunner(root, spawnerHandle);
+  await writeSkill(paths, "exec", "skill");
+
+  spawnerHandle.queue.push({
+    stdout: [
+      JSON.stringify({ type: "system", subtype: "init" }),
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{ type: "text", text: "hi" }],
+          usage: { input_tokens: 20_000 },
+        },
+      }),
+    ],
+    exitCode: 0,
+  });
+  // Queue a probe stub that, if invoked, would set contextPercentage to 99.
+  // It must NOT be reached.
+  spawnerHandle.queue.push({
+    stdout: [JSON.stringify({ usage: { input_tokens: 198_000 } })],
+    exitCode: 0,
+  });
+
+  const session = await runner.spawnAgent({
+    taskId: "T-ctx-skip-probe",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  // Only the main spawn happened — probe gated off.
+  assert.equal(spawnerHandle.calls.length, 1);
+  assert.equal(session.contextPercentage, 10); // 20_000 / 200_000 = 10%
+});
+
+test("fallback probe runs when no in-stream usage; uses --resume + json mode", async () => {
+  const root = await mkTmp();
+  const spawnerHandle = makeFakeSpawner();
+  const { runner, paths } = makeRunner(root, spawnerHandle);
+  await writeSkill(paths, "exec", "skill");
+
+  // Main: no usage event at all — observedInStream stays false.
+  spawnerHandle.queue.push({
+    stdout: [JSON.stringify({ type: "system", subtype: "init" })],
+    exitCode: 0,
+  });
+  // Probe response: JSON-mode object whose usage tokens compute to 42%
+  // against DEFAULT_CONTEXT_MAX = 200_000 (84_000 / 200_000 = 42%).
+  spawnerHandle.queue.push({
+    stdout: [
+      JSON.stringify({
+        type: "result",
+        usage: { input_tokens: 84_000 },
+      }),
+    ],
+    exitCode: 0,
+  });
+
+  const session = await runner.spawnAgent({
+    taskId: "T-ctx-fallback",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  assert.equal(session.contextPercentage, 42);
+  assert.equal(spawnerHandle.calls.length, 2);
+  const probeArgs = spawnerHandle.calls[1]!.args;
+  assert.ok(probeArgs.includes("--resume"), "probe must use --resume");
+  assert.ok(probeArgs.includes("--output-format"), "probe must specify --output-format");
+  assert.ok(probeArgs.includes("json"), "probe must use json output format");
+  assert.ok(!probeArgs.includes("/context"), "probe must not use legacy /context");
 });
 
 // ---------------------------------------------------------------------------

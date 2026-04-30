@@ -79,6 +79,11 @@ export interface AgentRunnerDeps {
 
 const UPDATE_THROTTLE_MS = 1000;
 
+// Approximate max-context tokens used to convert per-message `usage` totals
+// into a percentage. Mirrors the hardcoded 200k in `web/src/store.js`. Per-
+// model windows (Opus 1M, etc.) are intentionally out of scope here.
+const DEFAULT_CONTEXT_MAX = 200_000;
+
 // Grace window after a child process exits before we force its stdio streams
 // shut. Claude spawns MCP-server grandchildren that inherit the stdout/stderr
 // pipe FDs; they can keep the pipe open indefinitely after the direct child
@@ -378,6 +383,69 @@ function updateTokensFromPayload(
 
   walk(payload);
   return changed;
+}
+
+/**
+ * Returns input + cache_read + cache_creation for the most recent `usage`
+ * object found in `payload` (document order), or `undefined` if none. This
+ * approximates the model's current context occupancy at the moment the
+ * message was produced. Unlike `updateTokensFromPayload`, this does NOT
+ * accumulate across messages — sum-of-maxes overestimates because the
+ * peaks for input / cache_read / cache_creation can fall on different turns.
+ */
+function extractCurrentContextTokens(payload: unknown): number | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const visited = new WeakSet<object>();
+  let last: number | undefined;
+
+  const readUsage = (obj: Record<string, unknown>): number | undefined => {
+    const input = obj["input_tokens"];
+    const cacheRead = obj["cache_read_input_tokens"];
+    const cacheCreate = obj["cache_creation_input_tokens"];
+    let total = 0;
+    let any = false;
+    if (typeof input === "number" && Number.isFinite(input)) {
+      total += input;
+      any = true;
+    }
+    if (typeof cacheRead === "number" && Number.isFinite(cacheRead)) {
+      total += cacheRead;
+      any = true;
+    }
+    if (typeof cacheCreate === "number" && Number.isFinite(cacheCreate)) {
+      total += cacheCreate;
+      any = true;
+    }
+    return any ? total : undefined;
+  };
+
+  const walk = (node: unknown): void => {
+    if (!node || typeof node !== "object") return;
+    const obj = node as Record<string, unknown>;
+    if (visited.has(obj)) return;
+    visited.add(obj);
+
+    const usage = obj["usage"];
+    if (usage && typeof usage === "object") {
+      const v = readUsage(usage as Record<string, unknown>);
+      if (typeof v === "number") last = v;
+    }
+    if (
+      "input_tokens" in obj ||
+      "cache_read_input_tokens" in obj ||
+      "cache_creation_input_tokens" in obj
+    ) {
+      const v = readUsage(obj);
+      if (typeof v === "number") last = v;
+    }
+
+    for (const v of Object.values(obj)) {
+      if (v && typeof v === "object") walk(v);
+    }
+  };
+
+  walk(payload);
+  return last;
 }
 
 function applyUsageObject(
@@ -968,6 +1036,7 @@ export class AgentRunner {
 
     const tokens = emptyTokens();
     let lastUpdateAt = 0;
+    let observedInStream = false;
     let blockedReason: string | null = null;
     let reviewRequestedReason: string | null = null;
     let killed = false;
@@ -1178,7 +1247,27 @@ export class AgentRunner {
         }
 
         const tokensChanged = updateTokensFromPayload(tokens, payload);
-        if (tokensChanged) flushUpdate(false);
+
+        // Live context-percentage update: per-message `usage` already arrives
+        // in the mid-run stream, so populate the donut continuously. The
+        // post-run probe only fires as a fallback when this never observed a
+        // usage event. Combined with the tokens flush below so both updates
+        // land in the same throttled session.updated snapshot.
+        let contextChanged = false;
+        const ctxTokens = extractCurrentContextTokens(payload);
+        if (typeof ctxTokens === "number") {
+          observedInStream = true;
+          const pct = Math.min(
+            100,
+            Math.round((ctxTokens / DEFAULT_CONTEXT_MAX) * 100),
+          );
+          if (pct !== session.contextPercentage) {
+            session.contextPercentage = pct;
+            contextChanged = true;
+          }
+        }
+
+        if (tokensChanged || contextChanged) flushUpdate(false);
 
         if (kind === "assistant_text") {
           const text = extractAssistantText(payload);
@@ -1315,21 +1404,26 @@ export class AgentRunner {
       session.reviewRequested = { reason: reviewRequestedReason };
     }
 
-    // Post-run context probe — best-effort.
-    if (session.status !== "failed" && !killed) {
+    // Post-run context probe — fallback only when the in-stream path never
+    // observed a `usage` event (e.g. the run errored before the first
+    // assistant turn). The mid-run loop already populates contextPercentage
+    // in the common case, so skip the extra subprocess and ping cost.
+    if (session.status !== "failed" && !killed && !observedInStream) {
       try {
         const pct = await this.probeContextPercentage(
           claudeSessionId,
           args.worktreePath,
           model,
         );
-        if (typeof pct === "number") session.contextPercentage = pct;
-      } catch {
-        /* swallow — best-effort only */
-      }
-      // Re-emit update with context percentage if it changed.
-      if (typeof session.contextPercentage === "number") {
-        this.eventBus.emit("session.updated", { session: { ...session } });
+        if (typeof pct === "number") {
+          session.contextPercentage = pct;
+          this.eventBus.emit("session.updated", { session: { ...session } });
+        }
+      } catch (err) {
+        console.warn(
+          `[probeContext] fallback probe threw for ${claudeSessionId}:`,
+          err,
+        );
       }
     }
 
@@ -1369,58 +1463,98 @@ export class AgentRunner {
     cwd: string,
     model: string,
   ): Promise<number | undefined> {
+    // Resume the existing session with a benign no-op prompt and ask for a
+    // single JSON response. The `.usage` block on that response reports
+    // current per-message context tokens, which we convert to a percentage
+    // against `DEFAULT_CONTEXT_MAX`. Note: `--resume` (not `--session-id`) —
+    // the latter would create a new session with that id rather than
+    // attaching to the accumulated context.
     const proc = this.spawner({
       bin: "claude",
       args: [
         "-p",
-        "/context",
+        "ping",
+        "--resume",
+        sessionId,
         "--model",
         model,
         "--output-format",
-        "stream-json",
-        "--session-id",
-        sessionId,
+        "json",
       ],
       cwd,
     });
     this.liveProcs.add(proc);
     void proc.exit.finally(() => this.liveProcs.delete(proc));
 
-    // Consume stderr to keep the pipe flowing.
+    // 10s safety timeout so a hung probe never blocks session teardown.
+    const timeout = setTimeout(() => {
+      try {
+        proc.kill("SIGTERM");
+      } catch {
+        /* ignore */
+      }
+    }, 10_000);
+    timeout.unref?.();
+
+    // Drain stderr, keeping a short tail for diagnostics.
+    const stderrTail: string[] = [];
     void (async () => {
       try {
-        for await (const _l of proc.stderr) {
-          /* drain */
+        for await (const l of proc.stderr) {
+          stderrTail.push(l);
+          if (stderrTail.length > 10) stderrTail.shift();
         }
       } catch {
         /* ignore */
       }
     })();
 
-    let pct: number | undefined;
+    const chunks: string[] = [];
     try {
-      for await (const raw of proc.stdout) {
-        const line = raw.trim();
-        if (!line) continue;
-        const match = /(\d+(?:\.\d+)?)\s*%/.exec(line);
-        if (match) {
-          const n = Number(match[1]);
-          if (Number.isFinite(n) && n >= 0 && n <= 100) {
-            pct = n;
-          }
-        }
-      }
-    } catch {
-      /* ignore */
+      for await (const raw of proc.stdout) chunks.push(raw);
+    } catch (err) {
+      console.warn(
+        `[probeContext] stdout read failed for session ${sessionId}:`,
+        err,
+      );
     }
 
     try {
       await proc.exit;
-    } catch {
-      /* ignore */
+    } catch (err) {
+      console.warn(
+        `[probeContext] proc.exit rejected for session ${sessionId}:`,
+        err,
+      );
+    } finally {
+      clearTimeout(timeout);
     }
 
-    return pct;
+    const text = chunks.join("").trim();
+    if (!text) {
+      console.warn(
+        `[probeContext] empty stdout for session ${sessionId} (stderr tail: ${stderrTail.join(" | ").slice(0, 200)})`,
+      );
+      return undefined;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      console.warn(
+        `[probeContext] non-JSON stdout for session ${sessionId}:`,
+        text.slice(0, 200),
+      );
+      return undefined;
+    }
+    const ctx = extractCurrentContextTokens(parsed);
+    if (typeof ctx !== "number") {
+      console.warn(
+        `[probeContext] no usage in JSON response for session ${sessionId}`,
+      );
+      return undefined;
+    }
+    return Math.min(100, Math.round((ctx / DEFAULT_CONTEXT_MAX) * 100));
   }
 }
 
