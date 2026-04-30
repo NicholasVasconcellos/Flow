@@ -20,6 +20,7 @@ import {
 // there. The tree compacts itself so single-child splits get unwrapped.
 
 const STORAGE_KEY = "flow.layout.v4";
+const VIEW_MODE_KEY = "flow.dag.viewMode";
 
 function loadLayout() {
   try {
@@ -33,6 +34,12 @@ function loadLayout() {
 }
 function saveLayout(layout) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(layout)); } catch {}
+}
+function loadViewMode() {
+  try {
+    const v = localStorage.getItem(VIEW_MODE_KEY);
+    return v === "line" || v === "tree" ? v : "tree";
+  } catch { return "tree"; }
 }
 
 const ProjectScreen = () => {
@@ -83,6 +90,10 @@ const ProjectScreen = () => {
   const [selectedId, setSelectedId] = useState(null);
   const [hoveredId, setHoveredId] = useState(null);
   const [statusFilter, setStatusFilter] = useState(() => new Set(ALL_STATUSES));
+  const [viewMode, setViewMode] = useState(loadViewMode);
+  useEffect(() => {
+    try { localStorage.setItem(VIEW_MODE_KEY, viewMode); } catch {}
+  }, [viewMode]);
 
   const [closedSessionIds, setClosedSessionIds] = useState(() => new Set());
   const [logCollapsed, setLogCollapsed] = useState({});
@@ -167,6 +178,8 @@ const ProjectScreen = () => {
           onHover={setHoveredId}
           statusFilter={statusFilter}
           onChangeStatusFilter={setStatusFilter}
+          viewMode={viewMode}
+          onChangeViewMode={setViewMode}
         />
       </Panel>
     ),

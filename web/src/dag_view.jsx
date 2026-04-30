@@ -5,7 +5,36 @@ import { I } from './icons.jsx';
 
 export const ALL_STATUSES = ["pending", "ready", "running", "paused", "blocked", "done", "merged"];
 
-const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter, onChangeStatusFilter }) => {
+// Longest dependency-path depth from any root, computed over the full task set
+// so rows are stable when the status filter changes a task's visibility.
+function computeDepths(tasks) {
+  const taskMap = new Map(tasks.map(t => [t.id, t]));
+  const depths = new Map();
+  const visiting = new Set();
+  let cycleWarned = false;
+  function depth(id) {
+    if (depths.has(id)) return depths.get(id);
+    if (visiting.has(id)) {
+      if (!cycleWarned) {
+        console.warn(`[dag_view] dependency cycle at task ${id}; placing at row 0`);
+        cycleWarned = true;
+      }
+      return 0;
+    }
+    const t = taskMap.get(id);
+    const deps = t?.deps ?? [];
+    if (deps.length === 0) { depths.set(id, 0); return 0; }
+    visiting.add(id);
+    const d = 1 + Math.max(...deps.map(depId => depth(depId)));
+    visiting.delete(id);
+    depths.set(id, d);
+    return d;
+  }
+  tasks.forEach(t => depth(t.id));
+  return depths;
+}
+
+const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter, onChangeStatusFilter, viewMode, onChangeViewMode }) => {
   // Layout the DAG by stage (rows) and distribute x.
   // Canonical row order mirrors src/types.ts → TaskStageSchema. Any stage that
   // shows up on the wire but isn't in this list is appended after these so
@@ -37,25 +66,56 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter
   tasks.forEach(t => { if (statusFilter.has(t.status)) visibleIds.add(t.id); });
 
   // Compute layout positions
-  const ROW_H = 110;
-  const COL_W = 230;
+  const ROW_H = 180;
+  const COL_W = 360;
   const PAD_X = 60;
   const PAD_Y = 40;
 
-  // Assign x within stage by index, relative to 0
+  // Depth memo for tree mode — over the full task set so rows don't jump
+  // when the status filter hides a node.
+  const depths = React.useMemo(() => computeDepths(tasks), [tasks]);
+
+  // Assign x within row by index, relative to 0. Row index is stage in line
+  // mode and dependency depth in tree mode (default).
   const positions = {};
-  stageOrder.forEach((stage, rowIdx) => {
-    const items = byStage[stage].filter(t => visibleIds.has(t.id));
-    items.sort((a, b) => a.x - b.x);
-    const total = items.length;
-    items.forEach((t, i) => {
-      const offset = total === 1 ? 0 : (i - (total - 1) / 2);
-      positions[t.id] = {
-        x: offset * COL_W,
-        y: PAD_Y + rowIdx * ROW_H,
-      };
+  let numRows;
+  if (viewMode === "line") {
+    numRows = stageOrder.length;
+    stageOrder.forEach((stage, rowIdx) => {
+      const items = byStage[stage].filter(t => visibleIds.has(t.id));
+      items.sort((a, b) => a.x - b.x);
+      const total = items.length;
+      items.forEach((t, i) => {
+        const offset = total === 1 ? 0 : (i - (total - 1) / 2);
+        positions[t.id] = {
+          x: offset * COL_W,
+          y: PAD_Y + rowIdx * ROW_H,
+        };
+      });
     });
-  });
+  } else {
+    let maxDepth = 0;
+    depths.forEach(d => { if (d > maxDepth) maxDepth = d; });
+    numRows = maxDepth + 1;
+    const byDepth = new Map();
+    tasks.forEach(t => {
+      if (!visibleIds.has(t.id)) return;
+      const d = depths.get(t.id) ?? 0;
+      if (!byDepth.has(d)) byDepth.set(d, []);
+      byDepth.get(d).push(t);
+    });
+    for (let d = 0; d <= maxDepth; d++) {
+      const items = (byDepth.get(d) ?? []).slice().sort((a, b) => a.x - b.x);
+      const total = items.length;
+      items.forEach((t, i) => {
+        const offset = total === 1 ? 0 : (i - (total - 1) / 2);
+        positions[t.id] = {
+          x: offset * COL_W,
+          y: PAD_Y + d * ROW_H,
+        };
+      });
+    }
+  }
 
   // Compute bbox and shift everything so layout starts at PAD_X (accounting for node half-width 90)
   const xs = Object.values(positions).map(p => p.x);
@@ -66,7 +126,7 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter
   Object.values(positions).forEach(p => { p.x += shift; });
 
   const W = Math.max(720, (maxX - minX) + (PAD_X + NODE_HALF) * 2);
-  const H = PAD_Y + stageOrder.length * ROW_H + 40;
+  const H = PAD_Y + numRows * ROW_H + 40;
 
   const visibleTasks = tasks.filter(t => visibleIds.has(t.id));
 
@@ -92,7 +152,7 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter
   React.useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollLeft = Math.max(0, (el.scrollWidth - el.clientWidth) / 2);
-  }, [statusFilter]);
+  }, [statusFilter, viewMode]);
 
   // Zoom around a focal point (client coords); keeps the point under the cursor stable
   const zoomAt = React.useCallback((nextZoom, clientX, clientY) => {
@@ -311,6 +371,7 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter
             );
           })}
         </div>
+        <ViewModeToggle viewMode={viewMode} onChange={onChangeViewMode}/>
         <StatusFilterButton tasks={tasks} statusFilter={statusFilter} onChange={onChangeStatusFilter}/>
         <div style={{ pointerEvents: "auto", fontSize: 11.5, color: "var(--text-3)" }}>
           {visibleTasks.length} of {tasks.length} tasks
@@ -376,9 +437,9 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter
           transform: `scale(${zoom})`,
           transformOrigin: "0 0",
         }}>
-        {/* Stage row dividers */}
-        {stageOrder.map((s, i) => (
-          <div key={`row-${s}`} style={{
+        {/* Row dividers (stages in line mode, depth rows in tree mode) */}
+        {Array.from({ length: numRows }).map((_, i) => (
+          <div key={`row-${i}`} style={{
             position: "absolute",
             left: 0, right: 0,
             top: PAD_Y + i * ROW_H - 2,
@@ -504,6 +565,45 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter
     </div>
   );
 };
+
+function ViewModeToggle({ viewMode, onChange }) {
+  const opts = [
+    { id: "tree", label: "Tree", title: "Group by dependency depth" },
+    { id: "line", label: "Line", title: "Group by stage" },
+  ];
+  return (
+    <div style={{
+      pointerEvents: "auto",
+      display: "inline-flex",
+      background: "var(--bg-1)",
+      border: "1px solid var(--border-2)",
+      borderRadius: "var(--r-md)",
+      padding: 2,
+      gap: 1,
+    }}>
+      {opts.map(o => {
+        const active = viewMode === o.id;
+        return (
+          <button
+            key={o.id}
+            onClick={() => onChange(o.id)}
+            title={o.title}
+            style={{
+              background: active ? "var(--bg-3)" : "transparent",
+              border: "none",
+              borderRadius: 4,
+              padding: "3px 8px",
+              color: active ? "var(--text-1)" : "var(--text-3)",
+              fontSize: 11.5,
+              cursor: "pointer",
+            }}>
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function StatusFilterButton({ tasks, statusFilter, onChange }) {
   const [open, setOpen] = React.useState(false);
