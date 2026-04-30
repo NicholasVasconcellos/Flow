@@ -317,6 +317,7 @@ function renderBody(ev, collapsed) {
   }
   if (ev.kind === "tool_result") {
     const exit = ev.result?.exitCode;
+    const data = ev.result ?? ev.content;
     return (
       <div>
         {typeof exit === "number" && (
@@ -326,7 +327,7 @@ function renderBody(ev, collapsed) {
             </span>
           </div>
         )}
-        <KVBlock data={ev.result} tint={exit === 0 || exit === undefined ? "ok" : "err"}/>
+        <KVBlock data={data} tint={exit === 0 || exit === undefined ? "ok" : "err"}/>
       </div>
     );
   }
@@ -340,6 +341,9 @@ const KVBlock = ({ data, tint = "" }) => {
     err: "rgba(229,128,107,0.35)",
     info: "rgba(122,167,224,0.3)",
   }[tint] || "var(--border-2)";
+  if (data == null) return null;
+  const isPlainObject = typeof data === "object" && !Array.isArray(data);
+  const entries = isPlainObject ? Object.entries(data) : null;
   return (
     <div style={{
       background: "var(--bg-2)",
@@ -352,14 +356,18 @@ const KVBlock = ({ data, tint = "" }) => {
       color: "var(--text-2)",
       overflow: "auto",
     }}>
-      {Object.entries(data).map(([k, v]) => (
+      {entries ? entries.map(([k, v]) => (
         <div key={k} style={{ display: "flex", gap: 8, padding: "1px 0" }}>
           <span style={{ color: "var(--text-3)", minWidth: 70 }}>{k}:</span>
           <span style={{ color: "var(--text-1)", whiteSpace: "pre-wrap", wordBreak: "break-word", flex: 1 }}>
             {formatValue(v)}
           </span>
         </div>
-      ))}
+      )) : (
+        <span style={{ color: "var(--text-1)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          {formatValue(data)}
+        </span>
+      )}
     </div>
   );
 };
