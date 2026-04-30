@@ -124,10 +124,11 @@ export function stageSkill(stage: AgentStage): string {
 /** Read-only stages don't produce commits — UI checks are observational
  *  (ui-check/SKILL.md forbids editing application code) and code_review's
  *  happy path is "no findings, nothing to commit." update-learning writes
- *  to a non-tracked file outside the worktree (and may write project skills
- *  in `.claude/skills/`, picked up by the next merge). For these stages, a
- *  `done` signal is sufficient to advance, with no HEAD-moved requirement.
- *  documentation stays strict because missing docs is a real failure mode. */
+ *  to non-tracked files outside the worktree (`learnings-draft.md` and any
+ *  promoted skills under the project's `.flow/skills/`). For these stages
+ *  a `done` signal is sufficient to advance, with no HEAD-moved
+ *  requirement. documentation stays strict because missing docs is a real
+ *  failure mode. */
 export function stageCommitsExpected(stage: AgentStage): boolean {
   switch (stage) {
     case "exec_ui_check":

@@ -224,6 +224,13 @@ export async function composePrompt(
         `ui-review round:   ${args.uiReviewRound}`,
       );
     }
+    // update-learning may promote learnings into Flow's project skills
+    // dir at the project root (outside the worktree). Hand it the absolute
+    // path so the agent doesn't try to resolve `.flow/skills/` relative to
+    // the worktree's cwd.
+    if (args.stage === "update-learning") {
+      runtimeLines.push(`project skills dir: ${deps.paths.skillsDir}`);
+    }
     runtimeLines.push(
       "Edit only files inside cwd (except `learnings-draft.md` and the",
       "stage signal, which live outside the worktree). Wherever the skill",

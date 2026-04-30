@@ -4,9 +4,9 @@ description: >
   End-of-task reasoning stage. Read what happened across the whole task,
   reason about the bigger picture (including patterns spanning prior tasks),
   consolidate per-stage learning drafts with augmented "why" reasoning, and
-  promote durable lessons into project-level Claude Code skills under
-  `.claude/skills/`. No code changes; the only writes are to
-  `learnings-draft.md` and to project skill files.
+  promote durable lessons into Flow project skills under `.flow/skills/`.
+  No code changes; the only writes are to `learnings-draft.md` and to
+  project skill files.
 disable-model-invocation: true
 ---
 
@@ -18,8 +18,12 @@ budget to think carefully. Your output is what survives long-term.
 
 **You do not commit.** You do not modify application code, tests, configs, or
 task docs. The only writes allowed are to `learnings-draft.md` and to files
-under `<worktree>/.claude/skills/`. Newly created/edited skill files travel
-with the next merge — the merge stage stages them.
+under the **project skills dir** (absolute path in the **Runtime paths**
+block — it lives at the project root's `.flow/skills/`, *outside* the
+worktree). New/edited skill files take effect immediately for subsequent
+tasks; they are not part of this task's PR. The user can later promote any
+of them into `.claude/skills/` if they want them registered as Claude Code
+project skills.
 
 ## Inputs
 
@@ -40,8 +44,9 @@ For prior context (read all that exist):
 
 - All `*.md` under `.flow/learnings/` — distilled learnings from prior
   tasks. Use to spot recurrence and decide what to promote.
-- All `*/SKILL.md` under `<worktree>/.claude/skills/` — existing project
-  skills, so you can edit one rather than create a duplicate.
+- All `*/SKILL.md` under the **project skills dir** (absolute path in the
+  **Runtime paths** block) — existing project skills, so you can edit one
+  rather than create a duplicate.
 
 For skill-format reference (read once if you'll write skills):
 
@@ -114,7 +119,11 @@ the bar. Zero promotions per task is normal.
 
 ### Where to write
 
-Prefer editing an existing skill at `<worktree>/.claude/skills/<topic>/SKILL.md`
+Write into the **project skills dir** (absolute path given in the
+**Runtime paths** block). Each skill is a directory: `<project skills
+dir>/<topic>/SKILL.md`, with optional `references/*.md` alongside.
+
+Prefer editing an existing skill at `<project skills dir>/<topic>/SKILL.md`
 — scan for topical overlap first and make a narrow additive edit. If a new
 lesson fits an existing skill's trigger but the body would balloon, move
 detail into `references/<new-topic>.md` and link from SKILL.md.
@@ -124,12 +133,16 @@ For format and frontmatter conventions, follow the skill-creator skill
 field — name the trigger cue (file types, tool names, commands, error
 patterns) so the skill actually fires when needed.
 
+**Do not** write to `.claude/skills/` anywhere. Skills authored here live
+in Flow's project-skills directory; the user opts in to registering any of
+them as Claude Code project skills separately.
+
 ---
 
 ## Guardrails
 
-- **No code changes.** Only `learnings-draft.md` and files under
-  `<worktree>/.claude/skills/`.
+- **No code changes.** Only `learnings-draft.md` and files under the
+  project skills dir (the absolute path is in **Runtime paths**).
 - **No git commit.** The orchestrator advances on the stage signal alone.
 - **Don't fabricate.** Every entry and skill must trace to draft, progress,
   summary, diff, prior corpus, or existing skills.
