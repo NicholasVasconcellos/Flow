@@ -214,7 +214,9 @@ input:focus, textarea:focus, select:focus {
   border-radius: var(--r-lg);
   display: flex;
   flex-direction: column;
+  flex: 1 1 0;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
 }
 .panel-header {
@@ -345,15 +347,16 @@ input:focus, textarea:focus, select:focus {
 
 /* Resize handle */
 .resizer {
-  background: transparent;
+  background: var(--border-1);
   flex-shrink: 0;
   position: relative;
   z-index: 5;
   transition: background 0.15s;
+  touch-action: none;
 }
 .resizer.v { width: 6px; cursor: col-resize; }
 .resizer.h { height: 6px; cursor: row-resize; }
-.resizer:hover, .resizer.dragging { background: rgba(217,119,87,0.25); }
+.resizer:hover, .resizer.dragging { background: rgba(217,119,87,0.45); }
 
 /* SVG icon sizing */
 .ic { width: 14px; height: 14px; display: inline-block; flex-shrink: 0; }

@@ -9,6 +9,9 @@
 export const initialState = {
   version: null,
   PROJECTS: [],
+  PROJECT_NAME: '',
+  PROJECT_PATH: '',
+  GIT_REMOTE: null,
   CONFIG: {},
   TASKS: {},
   SESSIONS: {},
@@ -236,6 +239,9 @@ export function applyEvent(state, frame) {
 
       return {
         ...state,
+        PROJECT_NAME: project.name ?? state.PROJECT_NAME,
+        PROJECT_PATH: project.path ?? state.PROJECT_PATH,
+        GIT_REMOTE: project.gitRemote ?? null,
         CONFIG: newConfig,
         TASKS: newTasks,
         DAG: dag,

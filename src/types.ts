@@ -359,6 +359,7 @@ export const ProjectSchema = z.object({
   config: ConfigSchema,
   tasks: z.array(TaskRuntimeSchema),
   dag: DagSchema,
+  gitRemote: z.string().nullable().optional(),
 });
 export type Project = z.infer<typeof ProjectSchema>;
 

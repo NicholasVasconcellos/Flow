@@ -116,6 +116,7 @@ class FlowImpl implements Flow {
   private config: Config;
   private readonly projectPath: string;
   private readonly assetsDir: string;
+  private readonly gitRemote: string | null;
   private watchDispose: (() => void) | null = null;
   private stopped = false;
 
@@ -129,6 +130,7 @@ class FlowImpl implements Flow {
     git: GitManager;
     agent: AgentRunner;
     scheduler: Scheduler;
+    gitRemote: string | null;
   }) {
     this.projectPath = opts.projectPath;
     this.assetsDir = opts.assetsDir;
@@ -139,6 +141,7 @@ class FlowImpl implements Flow {
     this.git = opts.git;
     this.agent = opts.agent;
     this.scheduler = opts.scheduler;
+    this.gitRemote = opts.gitRemote;
   }
 
   // --- lifecycle ---------------------------------------------------------
@@ -301,6 +304,7 @@ class FlowImpl implements Flow {
       this.config,
       this.state.getTasks(),
       "ready",
+      this.gitRemote,
     );
   }
 
@@ -421,6 +425,7 @@ function buildProjectSnapshot(
   config: Config,
   tasks: TaskRuntime[],
   status: ProjectStatus,
+  gitRemote: string | null,
 ): Project {
   const dag = buildDagFromTasks(tasks);
   return {
@@ -430,6 +435,7 @@ function buildProjectSnapshot(
     config,
     tasks,
     dag,
+    gitRemote,
   };
 }
 
@@ -511,6 +517,12 @@ export async function createFlow(
     /* tasks.json missing or sync failed — caller can run ensureTasksLoaded */
   }
 
+  // Resolve origin URL once at project open. The user-set config.git.remote
+  // takes precedence; otherwise we read `git remote get-url origin`. Never
+  // queried per WS frame — TopBar reads from this cached value via getProject.
+  const gitRemote: string | null =
+    config.git.remote ?? (await git.getOriginUrl());
+
   const flow = new FlowImpl({
     projectPath,
     assetsDir,
@@ -521,6 +533,7 @@ export async function createFlow(
     git,
     agent,
     scheduler,
+    gitRemote,
   });
 
   // Emit project.state once.

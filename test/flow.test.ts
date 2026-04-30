@@ -113,6 +113,9 @@ function makeFakeGit(root: string): FakeGitHandle {
     async abortMerge(_strategy: "squash" | "merge") {
       /* no-op */
     },
+    async getOriginUrl() {
+      return null;
+    },
   };
   return { git: fake as GitManager, bumpHead };
 }

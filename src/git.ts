@@ -79,6 +79,16 @@ export class GitManager {
     await git.push(["-u", "origin", this.mainBranch]);
   }
 
+  async getOriginUrl(): Promise<string | null> {
+    try {
+      const url = await this.rootGit.raw(["remote", "get-url", "origin"]);
+      const trimmed = url.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    } catch {
+      return null;
+    }
+  }
+
   async createWorktree(
     taskId: string,
   ): Promise<{ worktreePath: string; branchName: string }> {

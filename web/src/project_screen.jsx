@@ -192,7 +192,6 @@ const ProjectScreen = () => {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--bg-0)" }}>
       <TopBar
-        project={{ name: "atlas-payments", directory: "~/code/atlas-payments" }}
         onResetLayout={resetLayout}
         flatDir={flatDir}
         onFlatten={flattenTo}
@@ -241,14 +240,14 @@ const LeafRenderer = ({ node, paneRenderers, paneCollapsed, dragging, hover, onP
   };
   return (
     <div style={{
-      flex: isCollapsed ? "0 0 auto" : (leafFlex != null ? leafFlex : 1),
+      flex: isCollapsed ? "0 0 auto" : 1,
       minWidth: isCollapsed ? 32 : 0,
       minHeight: isCollapsed ? 28 : 0,
       display: "flex",
       flexDirection: "column",
       position: "relative",
       opacity: isDragged ? 0.45 : 1,
-      transition: "opacity 0.15s, flex-basis 0.18s ease",
+      transition: "opacity 0.15s",
     }}>
       {paneRenderers[id](dragHandleProps)}
       {/* Edge drop overlay — only shown while dragging another pane */}
@@ -306,7 +305,7 @@ const SplitRenderer = ({ node, paneCollapsed, ...rest }) => {
               <SplitResizer
                 isRow={isRow}
                 dragging={rest.dragging}
-                onMouseDown={(e) => startSplitResize(e, node, i, rest.setTree, isRow)}
+                onPointerDown={(e) => startSplitResize(e, node, i, rest.setTree, isRow)}
               />
             )}
           </React.Fragment>
@@ -316,36 +315,28 @@ const SplitRenderer = ({ node, paneCollapsed, ...rest }) => {
   );
 };
 
-const SplitResizer = ({ isRow, onMouseDown, dragging }) => (
+const SplitResizer = ({ isRow, onPointerDown, dragging }) => (
   <div
-    onMouseDown={onMouseDown}
+    className={`resizer ${isRow ? "v" : "h"}${dragging ? " dragging" : ""}`}
+    onPointerDown={onPointerDown}
     style={{
-      [isRow ? "width" : "height"]: 6,
-      flexShrink: 0,
-      cursor: isRow ? "col-resize" : "row-resize",
       position: "relative",
       zIndex: dragging ? 0 : 1,
     }}
-  >
-    <div style={{
-      position: "absolute",
-      [isRow ? "left" : "top"]: 2,
-      [isRow ? "right" : "bottom"]: 2,
-      [isRow ? "top" : "left"]: 0,
-      [isRow ? "bottom" : "right"]: 0,
-    }}/>
-  </div>
+  />
 );
 
 // Resize between siblings of a particular split node. Mutates by `setTree`.
 function startSplitResize(e, splitNode, leftIdx, setTree, isRow) {
   e.preventDefault();
+  const target = e.currentTarget;
+  const pointerId = e.pointerId;
+  try { target.setPointerCapture(pointerId); } catch (_) { /* ignore */ }
   const startPos = isRow ? e.clientX : e.clientY;
   const startSizes = splitNode.sizes.slice();
   const total = startSizes[leftIdx] + startSizes[leftIdx + 1];
   // We need to know the pixel size of the (left+right) pair. Use the resizer's
   // parent (the split row/column).
-  const target = e.currentTarget;
   const parent = target && target.parentElement;
   const rect = parent ? parent.getBoundingClientRect() : null;
   const containerSize = rect ? (isRow ? rect.width : rect.height) : 1000;
@@ -367,14 +358,17 @@ function startSplitResize(e, splitNode, leftIdx, setTree, isRow) {
       return next;
     }));
   };
-  const onUp = () => {
-    window.removeEventListener("mousemove", onMove);
-    window.removeEventListener("mouseup", onUp);
+  const cleanup = () => {
+    target.removeEventListener("pointermove", onMove);
+    target.removeEventListener("pointerup", cleanup);
+    target.removeEventListener("pointercancel", cleanup);
+    try { target.releasePointerCapture(pointerId); } catch (_) { /* ignore */ }
     document.body.style.cursor = "";
   };
   document.body.style.cursor = isRow ? "col-resize" : "row-resize";
-  window.addEventListener("mousemove", onMove);
-  window.addEventListener("mouseup", onUp);
+  target.addEventListener("pointermove", onMove);
+  target.addEventListener("pointerup", cleanup);
+  target.addEventListener("pointercancel", cleanup);
 }
 
 // Find a split node in the tree that has the same shape (children leaf ids and dir)
@@ -636,7 +630,22 @@ const ProjectStatusPill = () => {
   );
 };
 
-const TopBar = ({ project, onResetLayout, flatDir, onFlatten }) => {
+// Parse `org/repo` out of common git remote URL forms:
+//   https://github.com/org/repo(.git)?
+//   git@github.com:org/repo(.git)?
+//   ssh://git@github.com/org/repo(.git)?
+// Returns null if the URL doesn't match — caller hides the button.
+const parseRepoSlug = (url) => {
+  if (!url) return null;
+  const m =
+    url.match(/[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/);
+  if (!m) return null;
+  return `${m[1]}/${m[2]}`;
+};
+
+const TopBar = ({ onResetLayout, flatDir, onFlatten }) => {
+  const { PROJECT_NAME, PROJECT_PATH, GIT_REMOTE } = useFlowData();
+  const repoSlug = parseRepoSlug(GIT_REMOTE);
   const [menuOpen, setMenuOpen] = useState(false);
   const settingsRef = useRef(null);
   useEffect(() => {
@@ -657,14 +666,16 @@ const TopBar = ({ project, onResetLayout, flatDir, onFlatten }) => {
       <div className="crumb" style={{ display: "flex", alignItems: "center", minWidth: 0, flexShrink: 1, overflow: "hidden" }}>
         <a href="Home.html" style={{ color: "var(--text-3)", textDecoration: "none", flexShrink: 0 }}>Projects</a>
         <span className="sep">/</span>
-        <span className="cur" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{project.name}</span>
+        <span className="cur" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{PROJECT_NAME}</span>
       </div>
-      <span className="mono" style={{ fontSize: 11, color: "var(--text-4)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0, flexShrink: 1 }}>{project.directory}</span>
+      <span className="mono" style={{ fontSize: 11, color: "var(--text-4)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0, flexShrink: 1 }}>{PROJECT_PATH}</span>
       <div style={{ flex: 1, minWidth: 8 }}/>
       <ProjectStatusPill/>
-      <button className="btn sm" style={{ whiteSpace: "nowrap", flexShrink: 0 }}>
-        <I.Github size={12}/> team-atlas/payments
-      </button>
+      {repoSlug && (
+        <button className="btn sm" style={{ whiteSpace: "nowrap", flexShrink: 0 }}>
+          <I.Github size={12}/> {repoSlug}
+        </button>
+      )}
       <button className="btn sm primary" style={{ whiteSpace: "nowrap", flexShrink: 0 }} disabled title="task.create command not yet implemented"><I.Plus size={12}/> New task</button>
       <button className="icon-btn" style={{ flexShrink: 0 }}><I.Bell size={14}/></button>
       <div ref={settingsRef} style={{ position: "relative", flexShrink: 0 }}>
