@@ -13,3 +13,6 @@ coverage/
 .tmp/
 .claude/
 issues
+.playwright-mcp/
+
+
