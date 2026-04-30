@@ -573,6 +573,73 @@ test("scenario F: transient pause resolves, then surviving review pause exits ne
   assert.match(log, /cycle=2 result=needs_review review=1 merged=1/);
 });
 
+test("lastResultPath: pre-existing file is unlinked on entry; outcome JSON is written before each return", async () => {
+  const dir = await mkTmp();
+  const lastResultPath = path.join(dir, "overnight.last-result.json");
+
+  // Pre-seed a stale last-result file to confirm it's wiped on entry.
+  await fs.writeFile(lastResultPath, '{"kind":"stale"}', "utf8");
+
+  // --- done path ---
+  {
+    const startMs = new Date("2026-04-29T22:00:00.000Z").getTime();
+    const clock = makeFakeClock(startMs);
+    const taskDone = makeTask({ id: "T1", status: "merged" });
+    const fake = makeFakeFlow({
+      snapshots: [{ tasks: [taskDone], sessions: [] }],
+    });
+    const result = await runOvernight(
+      {
+        flow: fake.flow,
+        logFilePath: path.join(dir, "overnight.log"),
+        lastResultPath,
+        print: () => {},
+        now: clock.now,
+        sleep: clock.sleep,
+      },
+      {},
+    );
+    assert.equal(result.kind, "done");
+    const written = JSON.parse(await fs.readFile(lastResultPath, "utf8"));
+    assert.deepEqual(written, result);
+  }
+
+  // --- fatal path: pre-existing (done) file from above gets unlinked on entry, then a fatal record is written ---
+  {
+    const startMs = new Date("2026-04-29T23:00:00.000Z").getTime();
+    const clock = makeFakeClock(startMs);
+    const tFatal = makeTask({
+      id: "T1",
+      status: "paused",
+      currentSessionId: "S1",
+      sessionIds: ["S1"],
+    });
+    const sFatal = makeSession({
+      id: "S1",
+      taskId: "T1",
+      status: "failed",
+      transientError: false,
+    });
+    const fake = makeFakeFlow({
+      snapshots: [{ tasks: [tFatal], sessions: [sFatal] }],
+    });
+    const result = await runOvernight(
+      {
+        flow: fake.flow,
+        logFilePath: path.join(dir, "overnight.log"),
+        lastResultPath,
+        print: () => {},
+        now: clock.now,
+        sleep: clock.sleep,
+      },
+      {},
+    );
+    assert.equal(result.kind, "fatal");
+    const written = JSON.parse(await fs.readFile(lastResultPath, "utf8"));
+    assert.deepEqual(written, result);
+  }
+});
+
 test("scenario G: real fatal coexisting with review pause still exits fatal, count excludes reviews", async () => {
   const dir = await mkTmp();
   const startMs = new Date("2026-04-29T22:00:00.000Z").getTime();

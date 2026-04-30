@@ -1,8 +1,16 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+import { writeJsonAtomic } from "./atomic.js";
 import type { Flow } from "./flow.js";
 import type { Session, TaskRuntime } from "./types.js";
+
+/** Worker process exit codes. The supervisor reads these to decide whether to
+ *  restart. EXIT_FATAL/EXIT_LOCK_CONFLICT are sysexits-inspired distinct codes
+ *  so a downstream wrapper (or human) can also tell outcomes apart. */
+export const EXIT_DONE = 0;
+export const EXIT_FATAL = 78;
+export const EXIT_LOCK_CONFLICT = 75;
 
 /** Buffer added on top of `resetsAt` so the request fires *after* the window
  *  reopens. Server clocks drift; this gives them headroom. */
@@ -29,6 +37,10 @@ export interface OvernightDeps {
   now?: () => number;
   /** DI for tests — sleep for `ms`. */
   sleep?: (ms: number) => Promise<void>;
+  /** When set, the worker writes its terminal `OvernightOutcome` to this path
+   *  atomically before returning. The supervisor reads it after the child
+   *  exits; "file present" means "worker reached a clean terminal outcome." */
+  lastResultPath?: string;
 }
 
 export interface OvernightOpts {
@@ -110,6 +122,24 @@ export async function runOvernight(
   const print = deps.print ?? ((line: string) => console.log(line));
 
   await fs.mkdir(path.dirname(deps.logFilePath), { recursive: true });
+
+  if (deps.lastResultPath) {
+    try {
+      await fs.unlink(deps.lastResultPath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+  }
+
+  const writeOutcome = async (
+    outcome: OvernightOutcome,
+  ): Promise<OvernightOutcome> => {
+    if (deps.lastResultPath) {
+      await writeJsonAtomic(deps.lastResultPath, outcome);
+    }
+    return outcome;
+  };
+
   const log = async (line: string): Promise<void> => {
     print(line);
     try {
@@ -159,7 +189,12 @@ export async function runOvernight(
       await log(
         `[${new Date(now()).toISOString()}] cycle=${cycle} result=done merged=${mergedCount} fatal=0 cycles=${cycle} elapsed=${formatElapsed(elapsedMs)}`,
       );
-      return { kind: "done", cycles: cycle, mergedCount, elapsedMs };
+      return await writeOutcome({
+        kind: "done",
+        cycles: cycle,
+        mergedCount,
+        elapsedMs,
+      });
     }
 
     const sessionsById = new Map<string, Session>();
@@ -190,13 +225,13 @@ export async function runOvernight(
       await log(
         `[${new Date(now()).toISOString()}] cycle=${cycle} result=fatal merged=${mergedCount} fatal=${fatal.length} review=${reviewRequested.length} transient=${transient.length} cycles=${cycle} elapsed=${formatElapsed(elapsedMs)}`,
       );
-      return {
+      return await writeOutcome({
         kind: "fatal",
         cycles: cycle,
         fatalCount: fatal.length,
         mergedCount,
         elapsedMs,
-      };
+      });
     }
 
     if (transient.length === 0) {
@@ -205,26 +240,26 @@ export async function runOvernight(
         await log(
           `[${new Date(now()).toISOString()}] cycle=${cycle} result=needs_review review=${reviewRequested.length} merged=${mergedCount} cycles=${cycle} elapsed=${formatElapsed(elapsedMs)}`,
         );
-        return {
+        return await writeOutcome({
           kind: "needs-review",
           cycles: cycle,
           reviewCount: reviewRequested.length,
           mergedCount,
           elapsedMs,
-        };
+        });
       }
       // No work to do but DAG isn't drained — treat as fatal so we don't spin.
       const elapsedMs = now() - startedAt;
       await log(
         `[${new Date(now()).toISOString()}] cycle=${cycle} result=fatal merged=${mergedCount} fatal=0 cycles=${cycle} elapsed=${formatElapsed(elapsedMs)} reason=stalled-no-runnable-tasks`,
       );
-      return {
+      return await writeOutcome({
         kind: "fatal",
         cycles: cycle,
         fatalCount: 0,
         mergedCount,
         elapsedMs,
-      };
+      });
     }
 
     let waitUntilMs = 0;

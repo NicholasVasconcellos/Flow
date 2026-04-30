@@ -23,8 +23,24 @@ node dist/cli.js overnight --at 23:00     # defer start until 11pm local
 
 `overnight` loops `run-all → sleep until the next `resetsAt` reported by
 Claude → `resume-all`, until the DAG is fully merged or a non-transient
-failure trips. It holds the orchestrator lock for the full duration and
-appends a one-line per-cycle summary to `.flow/overnight.log`.
+failure trips. It appends a one-line per-cycle summary to `.flow/overnight.log`.
+
+The command runs as a small parent supervisor that spawns the actual worker
+as a child. If the worker dies unexpectedly (OOM, segfault, hook crash) the
+supervisor respawns it with exponential backoff (1s → 2s → 4s … capped at
+60s) — `.flow/state.json` is durable and `runAll` is idempotent on restart,
+so a fresh worker reclaims the orchestrator lock and resumes where the dead
+one left off. Five consecutive crashes within 30s of spawn trip a circuit
+breaker that exits 1 instead of busy-looping. `[supervisor]` lines in
+`.flow/overnight.log` show spawn/restart history; the most recent terminal
+outcome is written atomically to `.flow/overnight.last-result.json`.
+
+Restarts cannot survive *parent* death (machine sleep without `caffeinate`,
+SIGHUP from the terminal, SIGKILL of the parent). For unattended runs:
+
+```bash
+caffeinate -i nohup node dist/cli.js overnight > .flow/overnight.stdout.log 2>&1 &
+```
 
 ## Layout
 
