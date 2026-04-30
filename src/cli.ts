@@ -727,6 +727,8 @@ program
       if (result.kind === "fatal") {
         process.exitCode = 1;
       }
+      // result.kind === "needs-review" exits 0: the run drained cleanly,
+      // remaining work is parked behind human review, not a failure.
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error(chalk.red(`overnight failed: ${(err as Error).message}`));

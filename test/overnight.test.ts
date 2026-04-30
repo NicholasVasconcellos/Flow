@@ -442,3 +442,190 @@ test("transient pause without any captured resetsAt falls back to 15m", async ()
   // Slept the 15-minute fallback.
   assert.equal(clock.now(), startMs + 15 * 60 * 1000);
 });
+
+test("scenario E: paused with reviewRequested set exits needs-review (not fatal), no sleep", async () => {
+  const dir = await mkTmp();
+  const startMs = new Date("2026-04-29T22:00:00.000Z").getTime();
+  const clock = makeFakeClock(startMs);
+
+  const task = makeTask({
+    id: "T1",
+    status: "paused",
+    currentSessionId: "S1",
+    sessionIds: ["S1"],
+  });
+  const session = makeSession({
+    id: "S1",
+    taskId: "T1",
+    status: "succeeded",
+    transientError: false,
+    reviewRequested: { reason: "haptic feedback timing looks off" },
+  });
+
+  const fake = makeFakeFlow({
+    snapshots: [{ tasks: [task], sessions: [session] }],
+  });
+
+  const result = await runOvernight(
+    {
+      flow: fake.flow,
+      logFilePath: path.join(dir, "overnight.log"),
+      print: () => {},
+      now: clock.now,
+      sleep: clock.sleep,
+    },
+    {},
+  );
+
+  assert.equal(result.kind, "needs-review");
+  if (result.kind === "needs-review") {
+    assert.equal(result.reviewCount, 1);
+    assert.equal(result.mergedCount, 0);
+    assert.equal(result.cycles, 1);
+  }
+  assert.equal(fake.runAllCalls, 1);
+  assert.equal(fake.resumeCalls, 0);
+  // No sleep — review pauses do not get retried.
+  assert.equal(clock.now(), startMs);
+  const log = await fs.readFile(path.join(dir, "overnight.log"), "utf8");
+  assert.match(log, /cycle=1 result=needs_review review=1 merged=0/);
+  assert.doesNotMatch(log, /result=fatal/);
+});
+
+test("scenario F: transient pause resolves, then surviving review pause exits needs-review", async () => {
+  const dir = await mkTmp();
+  const startMs = new Date("2026-04-29T22:00:00.000Z").getTime();
+  const resetsAtSec = Math.floor(startMs / 1000) + 60;
+  const clock = makeFakeClock(startMs);
+
+  // Cycle 1: T1 transient-paused, T2 review-paused.
+  const t1Pre = makeTask({
+    id: "T1",
+    status: "paused",
+    currentSessionId: "S1",
+    sessionIds: ["S1"],
+  });
+  const t2Pre = makeTask({
+    id: "T2",
+    status: "paused",
+    currentSessionId: "S2",
+    sessionIds: ["S2"],
+  });
+  const s1 = makeSession({
+    id: "S1",
+    taskId: "T1",
+    transientError: true,
+    rateLimitResetsAt: resetsAtSec,
+  });
+  const s2 = makeSession({
+    id: "S2",
+    taskId: "T2",
+    status: "succeeded",
+    reviewRequested: { reason: "double-check tile collision" },
+  });
+
+  // Cycle 2: T1 merged, T2 still review-paused. Use a fresh T2 object so the
+  // fake's resumePausedTasks (which mutates state.current.tasks) doesn't
+  // accidentally flip the cycle-2 snapshot's T2 to "ready".
+  const t1Post = makeTask({
+    id: "T1",
+    status: "merged",
+    currentSessionId: "S1",
+    sessionIds: ["S1"],
+  });
+  const t2Post = makeTask({
+    id: "T2",
+    status: "paused",
+    currentSessionId: "S2",
+    sessionIds: ["S2"],
+  });
+
+  const fake = makeFakeFlow({
+    snapshots: [
+      { tasks: [t1Pre, t2Pre], sessions: [s1, s2] },
+      { tasks: [t1Post, t2Post], sessions: [s1, s2] },
+    ],
+  });
+
+  const result = await runOvernight(
+    {
+      flow: fake.flow,
+      logFilePath: path.join(dir, "overnight.log"),
+      print: () => {},
+      now: clock.now,
+      sleep: clock.sleep,
+    },
+    {},
+  );
+
+  assert.equal(result.kind, "needs-review");
+  if (result.kind === "needs-review") {
+    assert.equal(result.reviewCount, 1);
+    assert.equal(result.mergedCount, 1);
+    assert.equal(result.cycles, 2);
+  }
+  assert.equal(fake.runAllCalls, 2);
+  // Slept exactly once (cycle 1 transient wait), then one resume.
+  assert.equal(fake.resumeCalls, 1);
+  assert.equal(clock.now(), resetsAtSec * 1000 + 30_000);
+  const log = await fs.readFile(path.join(dir, "overnight.log"), "utf8");
+  assert.match(log, /cycle=1 result=rate_limited/);
+  assert.match(log, /cycle=2 result=needs_review review=1 merged=1/);
+});
+
+test("scenario G: real fatal coexisting with review pause still exits fatal, count excludes reviews", async () => {
+  const dir = await mkTmp();
+  const startMs = new Date("2026-04-29T22:00:00.000Z").getTime();
+  const clock = makeFakeClock(startMs);
+
+  const tFatal = makeTask({
+    id: "T1",
+    status: "paused",
+    currentSessionId: "S1",
+    sessionIds: ["S1"],
+  });
+  const tReview = makeTask({
+    id: "T2",
+    status: "paused",
+    currentSessionId: "S2",
+    sessionIds: ["S2"],
+  });
+  const sFatal = makeSession({
+    id: "S1",
+    taskId: "T1",
+    status: "failed",
+    transientError: false,
+    error: "agent crashed",
+  });
+  const sReview = makeSession({
+    id: "S2",
+    taskId: "T2",
+    status: "succeeded",
+    reviewRequested: { reason: "verify XP curve" },
+  });
+
+  const fake = makeFakeFlow({
+    snapshots: [{ tasks: [tFatal, tReview], sessions: [sFatal, sReview] }],
+  });
+
+  const result = await runOvernight(
+    {
+      flow: fake.flow,
+      logFilePath: path.join(dir, "overnight.log"),
+      print: () => {},
+      now: clock.now,
+      sleep: clock.sleep,
+    },
+    {},
+  );
+
+  assert.equal(result.kind, "fatal");
+  if (result.kind === "fatal") {
+    // Fatal count must NOT include the review-pause.
+    assert.equal(result.fatalCount, 1);
+  }
+  assert.equal(fake.runAllCalls, 1);
+  assert.equal(clock.now(), startMs); // no sleep
+  const log = await fs.readFile(path.join(dir, "overnight.log"), "utf8");
+  assert.match(log, /result=fatal merged=0 fatal=1 review=1 transient=0/);
+});

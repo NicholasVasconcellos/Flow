@@ -49,6 +49,13 @@ export type OvernightOutcome =
       fatalCount: number;
       mergedCount: number;
       elapsedMs: number;
+    }
+  | {
+      kind: "needs-review";
+      cycles: number;
+      reviewCount: number;
+      mergedCount: number;
+      elapsedMs: number;
     };
 
 /** Validate an `--at HH:MM` argument; returns the next millisecond timestamp
@@ -165,18 +172,23 @@ export async function runOvernight(
     };
     const isTransientPaused = (t: TaskRuntime): boolean =>
       t.status === "paused" && latestSession(t)?.transientError === true;
+    const isReviewRequestedPaused = (t: TaskRuntime): boolean =>
+      t.status === "paused" && latestSession(t)?.reviewRequested != null;
 
     const transient = tasks.filter(isTransientPaused);
+    const reviewRequested = tasks.filter(isReviewRequestedPaused);
     const fatal = tasks.filter(
       (t) =>
-        (t.status === "paused" && !isTransientPaused(t)) ||
+        (t.status === "paused" &&
+          !isTransientPaused(t) &&
+          !isReviewRequestedPaused(t)) ||
         t.status === "blocked",
     );
 
     if (fatal.length > 0) {
       const elapsedMs = now() - startedAt;
       await log(
-        `[${new Date(now()).toISOString()}] cycle=${cycle} result=fatal merged=${mergedCount} fatal=${fatal.length} cycles=${cycle} elapsed=${formatElapsed(elapsedMs)}`,
+        `[${new Date(now()).toISOString()}] cycle=${cycle} result=fatal merged=${mergedCount} fatal=${fatal.length} review=${reviewRequested.length} transient=${transient.length} cycles=${cycle} elapsed=${formatElapsed(elapsedMs)}`,
       );
       return {
         kind: "fatal",
@@ -188,6 +200,19 @@ export async function runOvernight(
     }
 
     if (transient.length === 0) {
+      if (reviewRequested.length > 0) {
+        const elapsedMs = now() - startedAt;
+        await log(
+          `[${new Date(now()).toISOString()}] cycle=${cycle} result=needs_review review=${reviewRequested.length} merged=${mergedCount} cycles=${cycle} elapsed=${formatElapsed(elapsedMs)}`,
+        );
+        return {
+          kind: "needs-review",
+          cycles: cycle,
+          reviewCount: reviewRequested.length,
+          mergedCount,
+          elapsedMs,
+        };
+      }
       // No work to do but DAG isn't drained — treat as fatal so we don't spin.
       const elapsedMs = now() - startedAt;
       await log(
