@@ -188,6 +188,12 @@ export const SessionSchema = z.object({
    *  scheduler uses this to retry without consuming the agent-logic retry
    *  budget. */
   transientError: z.boolean().optional(),
+  /** Latest `resetsAt` (Unix seconds) seen on a `rate_limit_event` for this
+   *  session. Drives `flow overnight` — when transient pause is rate-limit
+   *  driven, the loop sleeps until this timestamp before resuming. */
+  rateLimitResetsAt: z.number().optional(),
+  /** Companion to `rateLimitResetsAt` — typically `"five_hour"`. */
+  rateLimitType: z.string().optional(),
   /** Set by the agent runner when the session emitted
    *  `FLOW_REVIEW_REQUESTED:`. The scheduler picks this up after the session
    *  ends to persist a warn-level notification — the queue continues. */

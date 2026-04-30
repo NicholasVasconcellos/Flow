@@ -640,6 +640,36 @@ function extractTimestamp(payload: unknown, fallback: string): string {
   return fallback;
 }
 
+/** Read `rate_limit_info` off a `rate_limit_event` payload. The Claude
+ *  stream-json format puts the info either at the top level or nested under
+ *  `message`, so we accept both. */
+export function extractRateLimitInfo(
+  payload: Record<string, unknown> | null | undefined,
+): { resetsAt?: number; rateLimitType?: string } | null {
+  if (!payload) return null;
+  const candidates: unknown[] = [
+    payload["rate_limit_info"],
+    (payload["message"] as Record<string, unknown> | undefined)?.[
+      "rate_limit_info"
+    ],
+  ];
+  for (const raw of candidates) {
+    if (!raw || typeof raw !== "object") continue;
+    const info = raw as Record<string, unknown>;
+    const out: { resetsAt?: number; rateLimitType?: string } = {};
+    if (typeof info["resetsAt"] === "number") {
+      out.resetsAt = info["resetsAt"] as number;
+    }
+    if (typeof info["rateLimitType"] === "string") {
+      out.rateLimitType = info["rateLimitType"] as string;
+    }
+    if (out.resetsAt !== undefined || out.rateLimitType !== undefined) {
+      return out;
+    }
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Execa-backed default spawner
 // ---------------------------------------------------------------------------
@@ -1045,6 +1075,15 @@ export class AgentRunner {
 
         if (payloadType === "rate_limit_event") {
           sawRateLimitEvent = true;
+          const info = extractRateLimitInfo(payloadObj);
+          if (info) {
+            if (typeof info.resetsAt === "number") {
+              session.rateLimitResetsAt = info.resetsAt;
+            }
+            if (typeof info.rateLimitType === "string") {
+              session.rateLimitType = info.rateLimitType;
+            }
+          }
         }
 
         // E1: wall-clock progress watchdog. Assistant text, non-empty tool_result,

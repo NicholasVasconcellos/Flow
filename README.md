@@ -14,6 +14,18 @@ node dist/cli.js init
 node dist/cli.js run-all
 ```
 
+### Run overnight, auto-restart through 5-hour session limits
+
+```bash
+node dist/cli.js overnight                # start now, run til done
+node dist/cli.js overnight --at 23:00     # defer start until 11pm local
+```
+
+`overnight` loops `run-all → sleep until the next `resetsAt` reported by
+Claude → `resume-all`, until the DAG is fully merged or a non-transient
+failure trips. It holds the orchestrator lock for the full duration and
+appends a one-line per-cycle summary to `.flow/overnight.log`.
+
 ## Layout
 
 - `src/` — TypeScript sources for the core library, CLI, and WebSocket server

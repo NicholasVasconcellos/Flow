@@ -784,6 +784,44 @@ test("stall after rate_limit_event marks session as transientError", async () =>
   assert.equal(session.transientError, true);
 });
 
+test("rate_limit_event with resetsAt populates session.rateLimitResetsAt", async () => {
+  const root = await mkTmp();
+  const STALL_MS = 150;
+  const RESETS_AT = 1_777_021_800;
+
+  const frames: StallScriptFrame[] = [
+    { line: JSON.stringify({ type: "system", subtype: "init" }), delayMs: 0 },
+    {
+      line: JSON.stringify({
+        type: "rate_limit_event",
+        rate_limit_info: {
+          status: "allowed",
+          overageStatus: "rejected",
+          resetsAt: RESETS_AT,
+          rateLimitType: "five_hour",
+        },
+      }),
+      delayMs: 0,
+    },
+    { line: null, delayMs: STALL_MS * 4 },
+  ];
+
+  const { spawner } = makeStallSpawner(frames);
+  const { runner, paths } = makeStallRunner(root, spawner, STALL_MS);
+  await writeSkill(paths, "exec", "skill");
+
+  const session = await runner.spawnAgent({
+    taskId: "T-stall-resetsAt",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  assert.equal(session.transientError, true);
+  assert.equal(session.rateLimitResetsAt, RESETS_AT);
+  assert.equal(session.rateLimitType, "five_hour");
+});
+
 test("stall without rate_limit_event leaves transientError unset", async () => {
   const root = await mkTmp();
   const STALL_MS = 150;

@@ -31,6 +31,7 @@ import type {
   Notification,
   Project,
   ProjectStatus,
+  Session,
   SessionEvent,
   TaskRuntime,
 } from "./types.js";
@@ -46,6 +47,7 @@ export interface Flow {
   getTasks(): TaskRuntime[];
   getNextTask(): TaskRuntime | null;
   getReadyTasks(): TaskRuntime[];
+  getSessions(): Session[];
   buildDag(): Dag;
 
   runOnce(): Promise<TaskRuntime | null>;
@@ -159,6 +161,10 @@ class FlowImpl implements Flow {
 
   getReadyTasks(): TaskRuntime[] {
     return this.state.getTasks().filter((t) => t.status === "ready");
+  }
+
+  getSessions(): Session[] {
+    return this.state.getSessions();
   }
 
   getNextTask(): TaskRuntime | null {

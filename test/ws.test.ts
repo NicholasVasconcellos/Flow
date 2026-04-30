@@ -98,6 +98,9 @@ function makeFakeFlow(): { flow: Flow; ctx: FakeFlowState } {
     getReadyTasks() {
       return [];
     },
+    getSessions() {
+      return [];
+    },
     buildDag() {
       return { nodes: [], edges: [] };
     },

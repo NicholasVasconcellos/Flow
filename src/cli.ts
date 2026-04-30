@@ -14,6 +14,7 @@ import { readJsonlLines } from "./atomic.js";
 import { topoSort } from "./dag.js";
 import { startWsServer, type WsServer } from "./ws.js";
 import { acquireLock } from "./orchestratorLock.js";
+import { runOvernight } from "./overnight.js";
 import type { Flow } from "./flow.js";
 import type { Config, SessionEvent, TaskRuntime } from "./types.js";
 
@@ -691,6 +692,51 @@ program
       }
     },
   );
+
+program
+  .command("overnight")
+  .description(
+    "run the project until done, sleeping through Claude session-limit windows",
+  )
+  .option(
+    "--at <hhmm>",
+    "defer start until this clock time, 24h (e.g. 23:00)",
+  )
+  .action(async (opts: { at?: string }) => {
+    if (opts.at !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(opts.at)) {
+      // eslint-disable-next-line no-console
+      console.error(
+        chalk.red(`invalid --at "${opts.at}"; expected HH:MM (24h)`),
+      );
+      process.exit(2);
+    }
+    const flow = await createFlow({ projectPath: process.cwd() });
+    installSigintHandler(flow);
+    const lock = await acquireCliLock(flow, "overnight");
+    const unsubscribe = subscribeToFlow(flow);
+    try {
+      await flow.ensureTasksLoaded();
+      const logFilePath = path.join(
+        flow.getPaths().flowDir,
+        "overnight.log",
+      );
+      const result = await runOvernight(
+        { flow, logFilePath },
+        opts.at ? { atTime: opts.at } : {},
+      );
+      if (result.kind === "fatal") {
+        process.exitCode = 1;
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(chalk.red(`overnight failed: ${(err as Error).message}`));
+      process.exitCode = 1;
+    } finally {
+      unsubscribe();
+      flow.stop();
+      await lock.release();
+    }
+  });
 
 program
   .command("cancel <taskId>")
