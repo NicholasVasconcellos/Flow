@@ -80,14 +80,11 @@ const ProjectScreen = () => {
   };
 
   // ---- Selected task / sessions ----
-  const [selectedId, setSelectedId] = useState("t5");
+  const [selectedId, setSelectedId] = useState(null);
   const [hoveredId, setHoveredId] = useState(null);
   const [statusFilter, setStatusFilter] = useState(() => new Set(ALL_STATUSES));
 
-  const [logSessionIds, setLogSessionIds] = useState(() => {
-    const initSessions = SESSIONS.filter(s => s.taskId === "t5").map(s => s.id);
-    return initSessions.length ? initSessions : ["s2", "s3", "s1"];
-  });
+  const [closedSessionIds, setClosedSessionIds] = useState(() => new Set());
   const [logCollapsed, setLogCollapsed] = useState({});
   const [logWidths, setLogWidths] = useState({});
   const [paneCollapsed, setPaneCollapsed] = useState({});
@@ -114,15 +111,25 @@ const ProjectScreen = () => {
   const [rightMode, setRightMode] = useState("task");
 
   useEffect(() => {
-    const taskSessions = SESSIONS.filter(s => s.taskId === selectedId).map(s => s.id);
-    setLogSessionIds(taskSessions);
+    setClosedSessionIds(new Set());
     setLogCollapsed({});
   }, [selectedId]);
 
-  const closeLog = (sid) => setLogSessionIds(ids => ids.filter(i => i !== sid));
+  const logSessionIds = useMemo(
+    () => SESSIONS
+      .filter(s => s.taskId === selectedId && !closedSessionIds.has(s.id))
+      .map(s => s.id),
+    [SESSIONS, selectedId, closedSessionIds],
+  );
+
+  const closeLog = (sid) =>
+    setClosedSessionIds(s => { const n = new Set(s); n.add(sid); return n; });
   const toggleLogCollapse = (sid) => setLogCollapsed(s => ({ ...s, [sid]: !s[sid] }));
   const openLog = (sid) => {
-    setLogSessionIds(ids => ids.includes(sid) ? ids : [...ids, sid]);
+    setClosedSessionIds(s => {
+      if (!s.has(sid)) return s;
+      const n = new Set(s); n.delete(sid); return n;
+    });
     setLogCollapsed(s => ({ ...s, [sid]: false }));
     requestAnimationFrame(() => {
       const wrap = document.querySelector(`[data-log-sid="${sid}"]`);
