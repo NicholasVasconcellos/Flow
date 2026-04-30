@@ -6,11 +6,31 @@ import { I } from './icons.jsx';
 export const ALL_STATUSES = ["pending", "ready", "running", "paused", "blocked", "done", "merged"];
 
 const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter, onChangeStatusFilter }) => {
-  // Layout the DAG by phase (rows) and distribute x
-  const phaseOrder = ["root", "spec", "execute", "test", "review", "document"];
-  const byPhase = {};
-  phaseOrder.forEach(p => byPhase[p] = []);
-  tasks.forEach(t => (byPhase[t.phase] ||= []).push(t));
+  // Layout the DAG by stage (rows) and distribute x.
+  // Canonical row order mirrors src/types.ts → TaskStageSchema. Any stage that
+  // shows up on the wire but isn't in this list is appended after these so
+  // nothing is silently dropped.
+  const CANONICAL_STAGES = [
+    "spec",
+    "exec",
+    "exec_ui_check",
+    "code_review",
+    "code_review_ui_check",
+    "documentation",
+    "update-learning",
+    "done",
+    "merged",
+  ];
+  const byStage = {};
+  CANONICAL_STAGES.forEach(s => byStage[s] = []);
+  tasks.forEach(t => {
+    const s = t.stage || "unknown";
+    (byStage[s] ||= []).push(t);
+  });
+  const stageOrder = [
+    ...CANONICAL_STAGES,
+    ...Object.keys(byStage).filter(s => !CANONICAL_STAGES.includes(s)).sort(),
+  ];
 
   // Filter by status: only render tasks whose status is in the active set.
   const visibleIds = new Set();
@@ -22,10 +42,10 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter
   const PAD_X = 60;
   const PAD_Y = 40;
 
-  // Assign x within phase by index, relative to 0
+  // Assign x within stage by index, relative to 0
   const positions = {};
-  phaseOrder.forEach((phase, rowIdx) => {
-    const items = byPhase[phase].filter(t => visibleIds.has(t.id));
+  stageOrder.forEach((stage, rowIdx) => {
+    const items = byStage[stage].filter(t => visibleIds.has(t.id));
     items.sort((a, b) => a.x - b.x);
     const total = items.length;
     items.forEach((t, i) => {
@@ -46,7 +66,7 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter
   Object.values(positions).forEach(p => { p.x += shift; });
 
   const W = Math.max(720, (maxX - minX) + (PAD_X + NODE_HALF) * 2);
-  const H = PAD_Y + phaseOrder.length * ROW_H + 40;
+  const H = PAD_Y + stageOrder.length * ROW_H + 40;
 
   const visibleTasks = tasks.filter(t => visibleIds.has(t.id));
 
@@ -98,13 +118,21 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter
     });
   }, [zoom]);
 
-  // Ctrl/Cmd + wheel → zoom; plain wheel → scroll normally
-  const onWheel = (e) => {
-    if (!(e.ctrlKey || e.metaKey)) return;
-    e.preventDefault();
-    const factor = Math.pow(1.0015, -e.deltaY);
-    zoomAt(zoom * factor, e.clientX, e.clientY);
-  };
+  // Ctrl/Cmd + wheel → zoom; plain wheel → scroll normally.
+  // React's onWheel is passive, so attach manually with { passive: false }
+  // to allow preventDefault() (otherwise the browser scrolls the page on pinch-zoom).
+  React.useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const handler = (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      const factor = Math.pow(1.0015, -e.deltaY);
+      zoomAt(zoom * factor, e.clientX, e.clientY);
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, [zoom, zoomAt]);
 
   // Keyboard shortcuts: Cmd/Ctrl + / - / 0 when the DAG is focused/hovered
   React.useEffect(() => {
@@ -200,7 +228,7 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter
   });
 
   return (
-    <div ref={scrollRef} onMouseDown={onPanDown} onWheel={onWheel} style={{ position: "relative", width: "100%", height: "100%", overflow: "auto", background: "var(--bg-0)", cursor: "grab", overscrollBehavior: "contain" }}>
+    <div ref={scrollRef} onMouseDown={onPanDown} style={{ position: "relative", width: "100%", height: "100%", overflow: "auto", background: "var(--bg-0)", cursor: "grab", overscrollBehavior: "contain" }}>
       {/* Controls */}
       <div style={{
         position: "sticky", top: 0, left: 0, right: 0,
@@ -348,9 +376,9 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter
           transform: `scale(${zoom})`,
           transformOrigin: "0 0",
         }}>
-        {/* Phase row dividers */}
-        {phaseOrder.map((p, i) => (
-          <div key={`row-${p}`} style={{
+        {/* Stage row dividers */}
+        {stageOrder.map((s, i) => (
+          <div key={`row-${s}`} style={{
             position: "absolute",
             left: 0, right: 0,
             top: PAD_Y + i * ROW_H - 2,
@@ -395,7 +423,7 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter
           const pos = positions[t.id];
           if (!pos) return null;
           const meta = window.FLOW_DATA.STATUS_META[t.status] || { label: t.status || "unknown", color: "var(--text-3)", dot: "idle" };
-          const phaseMeta = window.FLOW_DATA.PHASES[t.phase] || { label: t.phase || "unknown", color: "var(--text-3)" };
+          const stageMeta = window.FLOW_DATA.STAGES[t.stage] || { label: t.stage || "unknown", color: "var(--text-3)" };
           const isSel = selectedId === t.id;
           const isHov = hoveredId === t.id;
           const off = offsets[t.id] || { dx: 0, dy: 0 };
@@ -424,14 +452,16 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter
                 width: 200, minHeight: 64,
                 background: isSel ? "var(--bg-3)" : "var(--bg-1)",
                 borderStyle: "solid",
-                borderColor: isSel ? phaseMeta.color : isHov ? "var(--border-3)" : "var(--border-2)",
                 borderTopWidth: 1,
                 borderRightWidth: 1,
                 borderBottomWidth: 1,
                 borderLeftWidth: 3,
-                borderLeftColor: phaseMeta.color,
+                borderTopColor: isSel ? stageMeta.color : isHov ? "var(--border-3)" : "var(--border-2)",
+                borderRightColor: isSel ? stageMeta.color : isHov ? "var(--border-3)" : "var(--border-2)",
+                borderBottomColor: isSel ? stageMeta.color : isHov ? "var(--border-3)" : "var(--border-2)",
+                borderLeftColor: stageMeta.color,
                 borderRadius: "var(--r-md)",
-                boxShadow: isDragging ? "var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.35))" : isSel ? `0 0 0 3px ${phaseMeta.color}22, var(--shadow-md)` : isHov ? "var(--shadow-md)" : "none",
+                boxShadow: isDragging ? "var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.35))" : isSel ? `0 0 0 3px ${stageMeta.color}22, var(--shadow-md)` : isHov ? "var(--shadow-md)" : "none",
                 cursor: isDragging ? "grabbing" : "grab",
                 padding: "8px 10px",
                 display: "flex", flexDirection: "column", justifyContent: "space-between", gap: 6,
@@ -455,7 +485,7 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter
                   <span title={`UI review round ${t.uiReviewRound}`} style={{ fontSize: 9.5, padding: "0 4px", borderRadius: 3, background: "var(--purple-bg)", color: "var(--purple)", border: "1px solid rgba(183,136,224,0.22)", fontFamily: "var(--font-mono)" }}>UI·{t.uiReviewRound}</span>
                 )}
                 {t.lastError && (
-                  <span title={t.lastError} style={{ color: "var(--err)", display: "inline-flex" }}><I.AlertCirc size={10}/></span>
+                  <span title={typeof t.lastError === "string" ? t.lastError : (t.lastError?.message || "")} style={{ color: "var(--err)", display: "inline-flex" }}><I.AlertCirc size={10}/></span>
                 )}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "space-between" }}>

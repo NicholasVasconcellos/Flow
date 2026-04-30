@@ -233,7 +233,6 @@ export function applyEvent(state, frame) {
           newTasks[task.id] = {
             ...newTasks[task.id],
             ...task,
-            phase: task.stage === 'exec' ? 'execute' : task.stage,
             deps: task.requires,
           };
         }
@@ -287,7 +286,6 @@ export function applyEvent(state, frame) {
       const newTask = {
         ...prev,
         ...task,
-        phase: task.stage === 'exec' ? 'execute' : task.stage,
         deps: task.requires,
       };
       const newTasks = { ...state.TASKS, [task.id]: newTask };

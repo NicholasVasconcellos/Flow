@@ -1,6 +1,6 @@
 import React from 'react';
 import { I } from './icons.jsx';
-import { PhasePill, ContextDonut, formatK, formatCost } from './primitives.jsx';
+import { StagePill, ContextDonut, formatK, formatCost } from './primitives.jsx';
 import { useFlowData } from './FlowDataContext.jsx';
 
 // Context Charts, Learnings, Notifications panels
@@ -17,7 +17,7 @@ const ContextChartsPanel = () => {
       const n = 1 + (seed % 3);
       sessions = Array.from({ length: n }).map((_, i) => ({
         id: `${t.id}-demo-${i}`,
-        name: `${t.phase}:run-${i+1}`,
+        name: `${t.stage}:run-${i+1}`,
         model: "sonnet-4.5",
         contextUsed: 20_000 + ((seed * (i+1)) % 160_000),
         contextMax: 200_000,
@@ -61,7 +61,7 @@ const ContextChartsPanel = () => {
               <tr key={task.id} style={{ borderBottom: "1px solid var(--border-1)" }}>
                 <td style={{ padding: "10px 12px", verticalAlign: "middle" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <PhasePill phase={task.phase}/>
+                    <StagePill stage={task.stage}/>
                     <div>
                       <div style={{ color: "var(--text-1)", fontSize: 12 }}>{task.title}</div>
                       <div className="mono" style={{ fontSize: 10, color: "var(--text-4)" }}>{task.id}</div>
@@ -129,7 +129,7 @@ const LearningsPanel = () => {
                 color: "var(--text-2)", fontSize: 11.5,
               }}>
               {isOpen ? <I.Chevron size={11}/> : <I.ChevronRt size={11}/>}
-              <PhasePill phase={task?.phase || "execute"}/>
+              <StagePill stage={task?.stage || "exec"}/>
               <span style={{ color: "var(--text-1)", fontWeight: 500 }}>{task?.title || taskId}</span>
               <span className="count" style={{ marginLeft: "auto", background: "var(--bg-3)", padding: "1px 6px", borderRadius: 999, fontSize: 10 }}>{items.length}</span>
             </button>

@@ -1,20 +1,28 @@
-// Frontend-owned display metadata lifted from data.jsx.
-// Also shims window.FLOW_DATA so components that read STAGES/STATUS_META/PHASES
-// as globals continue to work without modification.
+// Frontend-owned display metadata.
+// Shims window.FLOW_DATA so components that read STAGES/STATUS_META as globals
+// continue to work without modification.
 
+// Keys mirror src/types.ts → TaskStageSchema (9) ∪ SessionStageSchema extras (6).
+// Keep this exhaustive: any stage on the wire that isn't here renders grey.
 export const STAGES = {
-  root:        { label: "Root",        color: "#d97757" },
-  spec:        { label: "Spec",        color: "#7aa7e0" },
-  exec:        { label: "Execute",     color: "#d97757" },
-  execute:     { label: "Execute",     color: "#d97757" },
-  test:        { label: "Test",        color: "#e3b341" },
-  review:      { label: "Review",      color: "#b788e0" },
-  "ui-review": { label: "UI Review",   color: "#b788e0" },
-  merge:       { label: "Merge",       color: "#9aa3b2" },
-  merged:      { label: "Merged",      color: "#7cc47f" },
-  document:    { label: "Document",    color: "#7cc47f" },
-  "update-learning": { label: "Learning", color: "#7cc47f" },
-  setup:       { label: "Setup",       color: "#9aa3b2" },
+  // TaskStage
+  spec:                   { label: "Spec",            color: "#7aa7e0" },
+  exec:                   { label: "Execute",         color: "#d97757" },
+  exec_ui_check:          { label: "UI Check",        color: "#b788e0" },
+  code_review:            { label: "Review",          color: "#b788e0" },
+  code_review_ui_check:   { label: "Review · UI",     color: "#b788e0" },
+  documentation:          { label: "Document",        color: "#7cc47f" },
+  "update-learning":      { label: "Learning",        color: "#7cc47f" },
+  done:                   { label: "Done",            color: "#7cc47f" },
+  merged:                 { label: "Merged",          color: "#7cc47f" },
+  // SessionStage extras (harness-internal stages that launch sessions but aren't
+  // task-level stages).
+  setup:                  { label: "Setup",           color: "#9aa3b2" },
+  "get-tasks":            { label: "Get Tasks",       color: "#9aa3b2" },
+  commit:                 { label: "Commit",          color: "#9aa3b2" },
+  commit_recovery:        { label: "Commit · Recover", color: "#e3b341" },
+  "merge-resolve":        { label: "Merge: resolve",  color: "#9aa3b2" },
+  "merge-verify":         { label: "Merge: verify",   color: "#9aa3b2" },
 };
 
 export const STATUS_META = {
@@ -35,19 +43,13 @@ export const STATUS_META = {
   idle:              { label: "Idle",              color: "var(--text-3)", dot: "idle" },
 };
 
-// Legacy alias: old code accessed STAGES under PHASES.
-export const PHASES = STAGES;
-
 export const HOME_DIRECTORIES = ["~/code", "~/workspaces", "~/Documents/projects", "~/dev"];
 
-// Shim for components that read these constants off window.FLOW_DATA.
-// Constants don't change at runtime so this is safe.
 if (typeof window !== 'undefined') {
   window.FLOW_DATA = {
     ...window.FLOW_DATA,
     STAGES,
     STATUS_META,
-    PHASES,
     HOME_DIRECTORIES,
   };
 }

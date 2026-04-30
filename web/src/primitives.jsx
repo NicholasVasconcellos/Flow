@@ -61,8 +61,8 @@ const Panel = ({ title, count, badge, actions, leftActions, children, collapsed:
 );
 };
 
-const PhasePill = ({ phase }) => {
-  const meta = window.FLOW_DATA.PHASES[phase];
+const StagePill = ({ stage }) => {
+  const meta = window.FLOW_DATA.STAGES[stage];
   if (!meta) return null;
   return (
     <span className="badge" style={{
@@ -140,4 +140,4 @@ function formatK(n) {
 }
 function formatCost(c) { return "$" + c.toFixed(2); }
 
-export { Panel, PhasePill, StatusBadge, ContextDonut, formatK, formatCost };
+export { Panel, StagePill, StatusBadge, ContextDonut, formatK, formatCost };

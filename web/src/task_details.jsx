@@ -1,6 +1,6 @@
 import React from 'react';
 import { I } from './icons.jsx';
-import { PhasePill, StatusBadge, ContextDonut, formatK, formatCost } from './primitives.jsx';
+import { StagePill, StatusBadge, ContextDonut, formatK, formatCost } from './primitives.jsx';
 import { useFlowData } from './FlowDataContext.jsx';
 
 // Task Details Panel — shown when a node is selected
@@ -16,9 +16,9 @@ const TaskDetailsPanel = ({ taskId, openLog, openLogIds = [] }) => {
       </div>
     );
   }
-  const stageMeta = window.FLOW_DATA.STAGES[task.stage] || window.FLOW_DATA.STAGES[task.phase] || { label: task.stage };
+  const stageMeta = window.FLOW_DATA.STAGES[task.stage] || { label: task.stage };
   const detail = TASK_DETAILS[taskId] || {
-    id: task.id, title: task.title, phase: task.phase, stage: task.stage, status: task.status,
+    id: task.id, title: task.title, stage: task.stage, status: task.status,
     description: {
       summary: `This task is part of the **${stageMeta.label}** stage. Full spec not loaded — click into its session to see logs.`,
       acceptance: ["Placeholder acceptance criteria."],
@@ -53,7 +53,7 @@ const TaskDetailsPanel = ({ taskId, openLog, openLogIds = [] }) => {
       <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 10 }}>
         <div style={{ flex: 1 }}>
           <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-            <PhasePill phase={task.phase}/>
+            <StagePill stage={task.stage}/>
             <StatusBadge status={task.status}/>
             <span className="mono" style={{ fontSize: 10.5, color: "var(--text-4)", alignSelf: "center" }}>{task.id}</span>
           </div>
@@ -109,8 +109,13 @@ const TaskDetailsPanel = ({ taskId, openLog, openLogIds = [] }) => {
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, color: "var(--err)", fontWeight: 600, fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.06em" }}>
             <I.AlertCirc size={12}/> Last error
+            {typeof runtime.lastError === "object" && runtime.lastError?.stage && (
+              <span className="mono" style={{ marginLeft: "auto", color: "var(--text-4)", fontWeight: 400, fontSize: 10, letterSpacing: 0, textTransform: "none" }}>{runtime.lastError.stage}</span>
+            )}
           </div>
-          {runtime.lastError}
+          {typeof runtime.lastError === "string"
+            ? runtime.lastError
+            : (runtime.lastError?.message ?? JSON.stringify(runtime.lastError))}
         </div>
       )}
 
