@@ -273,6 +273,15 @@ const fixtureTask = (overrides) => ({
 
 const EDGE_CASE_TASKS = [
   fixtureTask({
+    id: "fixture-edge-ready-spec",
+    title: "Fixture edge: ready awaiting dispatch",
+    description: "Synthetic coverage for a task whose deps are satisfied and is queued for spec.",
+    contextFiles: ["scenes/title_screen.tscn"],
+    requires: [TASKS[0]?.id].filter(Boolean),
+    status: "ready",
+    stage: "spec",
+  }),
+  fixtureTask({
     id: "fixture-edge-exec-ui-check",
     title: "Fixture edge: running exec UI check",
     description: "Synthetic coverage for a UI task currently looping through exec_ui_check.",
