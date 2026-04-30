@@ -228,20 +228,21 @@ const STAGES = CONFIG.stages;
 const DAG = buildDag(TASKS);
 const PROJECT_STATUS = TASKS.some((task) => task.status === "running") ? "running" : "ready";
 
+const PROJECT_SESSIONS = readProjectSessions();
+const STATE_SESSIONS = STATE.sessions.map(normalizeSession);
+const SESSIONS = Array.from(
+  new Map([...PROJECT_SESSIONS, ...STATE_SESSIONS].map((session) => [session.id, session])).values(),
+);
+
 const PROJECT = {
   name: path.basename(FLOW_PROJECT_PATH),
   path: FLOW_PROJECT_PATH,
   status: PROJECT_STATUS,
   config: CONFIG,
   tasks: TASKS,
+  sessions: SESSIONS,
   dag: DAG,
 };
-
-const PROJECT_SESSIONS = readProjectSessions();
-const STATE_SESSIONS = STATE.sessions.map(normalizeSession);
-const SESSIONS = Array.from(
-  new Map([...PROJECT_SESSIONS, ...STATE_SESSIONS].map((session) => [session.id, session])).values(),
-);
 const SESSION_EVENT_FRAMES = readRepresentativeSessionEvents(SESSIONS);
 const NOTIFICATIONS = readJsonl(path.join(FLOW_DIR, "notifications.jsonl")).slice(-16);
 const LEARNING_FRAMES = readLearnings();

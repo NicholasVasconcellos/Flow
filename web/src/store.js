@@ -15,6 +15,7 @@ export const initialState = {
   CONFIG: {},
   TASKS: {},
   SESSIONS: {},
+  SESSIONS_HYDRATED: false,
   LOG_EVENTS: [],
   NOTIFICATIONS: [],
   LEARNINGS: [],
@@ -70,6 +71,32 @@ function normalizeTokens(tokens) {
   const out = { ...rest };
   if (cacheCreate !== undefined) out.cacheWrite = cacheCreate;
   return out;
+}
+
+/**
+ * Apply UI-shape transforms to a raw wire session: ordinal, display name,
+ * context window derivation, token field renames. Used by both the
+ * project.state snapshot merge and session.started/updated handlers so the
+ * shape stays in lockstep.
+ */
+function hydrateSession(state, raw) {
+  const id = raw.id;
+  const existing = state.SESSIONS[id] ?? {};
+  const ordinal =
+    raw.ordinal ?? existing.ordinal ?? ordinalFor(state.SESSIONS, raw.taskId, raw.stage);
+  const name = sessionName(raw.taskId, raw.stage, ordinal);
+  const contextPercentage = raw.contextPercentage ?? existing.contextPercentage ?? 0;
+  const contextMax = 200_000;
+  const contextUsed = Math.round((contextMax * contextPercentage) / 100);
+  return {
+    ...existing,
+    ...raw,
+    ordinal,
+    name,
+    contextUsed,
+    contextMax,
+    tokens: normalizeTokens(raw.tokens) ?? existing.tokens,
+  };
 }
 
 /**
@@ -238,6 +265,18 @@ export function applyEvent(state, frame) {
         }
       }
 
+      // Merge sessions from project.state. Replays historical sessions on
+      // (re)connect so the UI doesn't lose them between WS opens. Does NOT
+      // synthesize prompt LOG_EVENTS — that is session.started-only behavior.
+      let newSessions = state.SESSIONS;
+      if (Array.isArray(project.sessions)) {
+        newSessions = { ...state.SESSIONS };
+        let working = { SESSIONS: newSessions };
+        for (const raw of project.sessions) {
+          newSessions[raw.id] = hydrateSession(working, raw);
+        }
+      }
+
       // Process embedded DAG if present
       let newDagState = state[_RAW_DAG_KEY] ?? { nodes: [], edges: [] };
       if (project.dag) {
@@ -253,6 +292,8 @@ export function applyEvent(state, frame) {
         GIT_REMOTE: project.gitRemote ?? null,
         CONFIG: newConfig,
         TASKS: newTasks,
+        SESSIONS: newSessions,
+        SESSIONS_HYDRATED: true,
         DAG: dag,
         [_RAW_DAG_KEY]: newDagState,
       };
@@ -313,25 +354,7 @@ export function applyEvent(state, frame) {
     case 'session.started': {
       const raw = frame.session;
       const id = raw.id;
-
-      // Determine ordinal: use wire value if present, else count existing sessions
-      const ordinal = raw.ordinal ?? ordinalFor(state.SESSIONS, raw.taskId, raw.stage);
-      const name = sessionName(raw.taskId, raw.stage, ordinal);
-
-      const contextPercentage = raw.contextPercentage ?? 0;
-      const contextMax = 200_000;
-      const contextUsed = Math.round(contextMax * contextPercentage / 100);
-
-      const session = {
-        ...state.SESSIONS[id],
-        ...raw,
-        ordinal,
-        name,
-        contextUsed,
-        contextMax,
-        tokens: normalizeTokens(raw.tokens),
-      };
-
+      const session = hydrateSession(state, raw);
       const newSessions = { ...state.SESSIONS, [id]: session };
 
       // Synthesize a user LOG_EVENT from the prompt

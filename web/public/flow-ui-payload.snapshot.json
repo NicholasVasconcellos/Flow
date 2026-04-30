@@ -2567,6 +2567,7 @@
             "updatedAt": "2026-04-29T17:40:31.810Z"
           }
         ],
+        "sessions": [],
         "dag": {
           "nodes": [
             "initialize-godot-project-with-basic-configuration",

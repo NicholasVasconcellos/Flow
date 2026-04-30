@@ -6,7 +6,7 @@ import { useFlowData } from './FlowDataContext.jsx';
 // Task Details Panel — shown when a node is selected
 const TaskDetailsPanel = ({ taskId, openLog, openLogIds = [] }) => {
   const flowData = useFlowData();
-  const { TASKS, TASK_DETAILS, SESSIONS } = flowData;
+  const { TASKS, TASK_DETAILS, SESSIONS, SESSIONS_HYDRATED } = flowData;
   const task = TASKS.find(t => t.id === taskId);
   if (!task) {
     return (
@@ -166,6 +166,20 @@ const TaskDetailsPanel = ({ taskId, openLog, openLogIds = [] }) => {
       )}
 
       {/* Sessions */}
+      {!SESSIONS_HYDRATED && taskSessions.length === 0 && (
+        <>
+          <SectionH>Sessions</SectionH>
+          <div style={{
+            display: "flex", alignItems: "center", gap: 8,
+            padding: "10px 12px", marginBottom: 12,
+            background: "var(--bg-2)", border: "1px solid var(--border-1)",
+            borderRadius: "var(--r-sm)", color: "var(--text-3)", fontSize: 11.5,
+          }}>
+            <span className="flow-spinner" aria-hidden="true" />
+            <span>Loading sessions…</span>
+          </div>
+        </>
+      )}
       {taskSessions.length > 0 && (
         <>
           <SectionH>Sessions ({taskSessions.length})</SectionH>

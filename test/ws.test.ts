@@ -48,6 +48,7 @@ function makeProject(config: Config): Project {
     status: "ready",
     config,
     tasks: [],
+    sessions: [],
     dag,
   };
 }

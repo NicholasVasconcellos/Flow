@@ -358,6 +358,7 @@ export const ProjectSchema = z.object({
   status: ProjectStatusSchema,
   config: ConfigSchema,
   tasks: z.array(TaskRuntimeSchema),
+  sessions: z.array(SessionSchema),
   dag: DagSchema,
   gitRemote: z.string().nullable().optional(),
 });

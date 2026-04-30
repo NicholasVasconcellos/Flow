@@ -377,6 +377,21 @@ input:focus, textarea:focus, select:focus {
 }
 .flash-focus { animation: flowFlashFocus 900ms ease-out 1; }
 
+/* Loading spinner — used while waiting for snapshot data (e.g. sessions) */
+@keyframes flowSpin {
+  to { transform: rotate(360deg); }
+}
+.flow-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--border-2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: flowSpin 700ms linear infinite;
+  vertical-align: -2px;
+}
+
 /* Focus ring */
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 3px; }
 

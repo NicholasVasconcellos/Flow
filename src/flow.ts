@@ -303,6 +303,7 @@ class FlowImpl implements Flow {
       this.projectPath,
       this.config,
       this.state.getTasks(),
+      this.state.getSessions(),
       "ready",
       this.gitRemote,
     );
@@ -424,6 +425,7 @@ function buildProjectSnapshot(
   projectPath: string,
   config: Config,
   tasks: TaskRuntime[],
+  sessions: Session[],
   status: ProjectStatus,
   gitRemote: string | null,
 ): Project {
@@ -434,6 +436,7 @@ function buildProjectSnapshot(
     status,
     config,
     tasks,
+    sessions,
     dag,
     gitRemote,
   };
