@@ -31,3 +31,20 @@ If a problem is specific to the downstream project itself — the agent is stuck
 2. Append the correction to the project's learnings (.flow/learning/<task-name>)
 
 Reserve `issues/` for things Flow itself should detect, prevent, or recover from.
+
+## Learnings
+
+Non-obvious gotchas and hard-won knowledge live as one file per topic under `learnings/<short-kebab-name>.md`.
+
+When you hit a subtle bug, framework quirk, or constraint that wasn't obvious from the code or docs — and a future agent could plausibly trip on it again — write it down:
+
+1. Add a file `learnings/<short-kebab-name>.md`.
+2. The file should contain:
+   - **Symptom:** the error message or observed behavior.
+   - **Root cause:** why it happens.
+   - **Fix pattern:** the shape of the fix (code snippet if useful).
+   - **Takeaway:** the generalized rule, so the lesson transfers beyond the specific bug.
+
+Unlike `issues/`, learnings are not deleted once resolved — they are reference material. Update them if your understanding sharpens, but don't churn the file over cosmetic edits.
+
+Scope: things that would surprise a competent reader of the code. Not for general best practices, not for things already documented in framework docs, not for one-off project decisions.
