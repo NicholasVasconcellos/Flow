@@ -18,7 +18,6 @@ export const initialState = {
   LOG_EVENTS: [],
   NOTIFICATIONS: [],
   LEARNINGS: [],
-  SUGGESTIONS: [],
   DAG: { nodes: [], edges: [] },
   TASK_DETAILS: {},
   errors: [],
@@ -163,8 +162,19 @@ function buildLogEvent(event) {
   }
 
   if (kind === 'tool_result') {
-    const content = payload.content ?? extractContent(payload);
-    return { ...base, content };
+    const result = payload.tool_use_result ?? null;
+    let content = null;
+    const msgContent = payload.message?.content;
+    if (Array.isArray(msgContent)) {
+      const block = msgContent.find((b) => b.type === 'tool_result');
+      if (block) {
+        content = typeof block.content === 'string'
+          ? block.content
+          : block.content != null ? JSON.stringify(block.content) : null;
+      }
+    }
+    if (content == null) content = payload.content ?? extractContent(payload);
+    return { ...base, result, content };
   }
 
   // Passthrough for any other kept kinds
@@ -390,7 +400,8 @@ export function applyEvent(state, frame) {
     case 'session.event': {
       const logEvent = buildLogEvent(frame.event);
       if (!logEvent) return state;
-      return { ...state, LOG_EVENTS: [...state.LOG_EVENTS, logEvent] };
+      const withId = { id: `evt-${state.LOG_EVENTS.length}`, ...logEvent };
+      return { ...state, LOG_EVENTS: [...state.LOG_EVENTS, withId] };
     }
 
     // -----------------------------------------------------------------------

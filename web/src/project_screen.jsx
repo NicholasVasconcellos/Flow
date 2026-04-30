@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { I } from './icons.jsx';
 import { Panel } from './primitives.jsx';
-import { DAGView } from './dag_view.jsx';
+import { DAGView, ALL_STATUSES } from './dag_view.jsx';
 import { LogColumn } from './log_column.jsx';
 import { TaskDetailsPanel } from './task_details.jsx';
-import { ContextChartsPanel, LearningsPanel, NotificationsPanel, SuggestionsPanel } from './side_panels.jsx';
+import { ContextChartsPanel, LearningsPanel, NotificationsPanel } from './side_panels.jsx';
 import { useFlowData } from './FlowDataContext.jsx';
 import {
   defaultTree,
@@ -82,7 +82,7 @@ const ProjectScreen = () => {
   // ---- Selected task / sessions ----
   const [selectedId, setSelectedId] = useState("t5");
   const [hoveredId, setHoveredId] = useState(null);
-  const [showAllTasks, setShowAllTasks] = useState(true);
+  const [statusFilter, setStatusFilter] = useState(() => new Set(ALL_STATUSES));
 
   const [logSessionIds, setLogSessionIds] = useState(() => {
     const initSessions = SESSIONS.filter(s => s.taskId === "t5").map(s => s.id);
@@ -158,8 +158,8 @@ const ProjectScreen = () => {
           onSelect={(id) => { setSelectedId(id); setRightMode("task"); }}
           hoveredId={hoveredId}
           onHover={setHoveredId}
-          showAll={showAllTasks}
-          onToggleShowAll={setShowAllTasks}
+          statusFilter={statusFilter}
+          onChangeStatusFilter={setStatusFilter}
         />
       </Panel>
     ),
@@ -515,13 +515,12 @@ const SessionsPane = ({ logSessionIds, logCollapsed, logWidths, startLogResize, 
 
 // ---- Details pane ----
 const DetailsPane = ({ mode, setMode, selectedId, openLog, openLogIds, dragHandleProps, collapsed, onToggleCollapse }) => {
-  const { LEARNINGS, NOTIFICATIONS, SUGGESTIONS } = useFlowData();
+  const { LEARNINGS, NOTIFICATIONS } = useFlowData();
   const tabs = [
     { id: "task",          label: "Task",          icon: <I.Info size={12}/> },
     { id: "context",       label: "Context",       icon: <I.Cpu size={12}/> },
     { id: "learnings",     label: "Learnings",     icon: <I.Lightbulb size={12}/>, count: LEARNINGS.length },
     { id: "notifications", label: "Alerts",        icon: <I.Bell size={12}/>, count: NOTIFICATIONS.length, urgent: true },
-    { id: "suggestions",   label: "Tips",          icon: <I.MessageSq size={12}/>, count: SUGGESTIONS.length },
   ];
 
   const tabBarRef = React.useRef(null);
@@ -541,7 +540,6 @@ const DetailsPane = ({ mode, setMode, selectedId, openLog, openLogIds, dragHandl
     context:       { title: "Context usage", icon: <I.Cpu size={13}/> },
     learnings:     { title: "Learnings", icon: <I.Lightbulb size={13}/>, count: LEARNINGS.length },
     notifications: { title: "Notifications", icon: <I.Bell size={13}/>, count: NOTIFICATIONS.length },
-    suggestions:   { title: "Suggestions", icon: <I.MessageSq size={13}/>, count: SUGGESTIONS.length },
   };
   const cur = panelTitleMap[mode];
 
@@ -609,7 +607,6 @@ const DetailsPane = ({ mode, setMode, selectedId, openLog, openLogIds, dragHandl
       {mode === "context" && <ContextChartsPanel/>}
       {mode === "learnings" && <LearningsPanel/>}
       {mode === "notifications" && <NotificationsPanel/>}
-      {mode === "suggestions" && <SuggestionsPanel/>}
     </Panel>
   );
 };

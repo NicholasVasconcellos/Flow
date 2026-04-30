@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 import './displayMeta.js';
@@ -28,26 +28,65 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+function ConnectionBanner({ status, wsUrl }) {
+  if (status === 'connected') return null;
+
+  const styles = {
+    fixture:      { bg: 'var(--warn-bg)',  fg: 'var(--warn)',   border: 'rgba(227,179,65,0.3)' },
+    connecting:   { bg: 'var(--bg-2)',     fg: 'var(--text-3)', border: 'var(--border-2)' },
+    disconnected: { bg: 'var(--warn-bg)',  fg: 'var(--warn)',   border: 'rgba(227,179,65,0.3)' },
+  }[status] || null;
+  if (!styles) return null;
+
+  const message = status === 'fixture'
+    ? <>Showing fixture snapshot — append <code style={{ background: 'var(--bg-3)', padding: '0 4px', borderRadius: 3 }}>?ws={wsUrl}</code> for live data</>
+    : status === 'connecting'
+      ? <>Connecting to <code style={{ background: 'var(--bg-3)', padding: '0 4px', borderRadius: 3 }}>{wsUrl}</code>…</>
+      : <>Disconnected from <code style={{ background: 'var(--bg-3)', padding: '0 4px', borderRadius: 3 }}>{wsUrl}</code> — retrying</>;
+
+  return (
+    <div style={{
+      background: styles.bg,
+      color: styles.fg,
+      borderBottom: `1px solid ${styles.border}`,
+      padding: '6px 12px',
+      fontSize: 12,
+      fontFamily: 'var(--font-sans)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+    }}>
+      <span style={{ fontWeight: 500 }}>{message}</span>
+    </div>
+  );
+}
+
 function App() {
   const { dispatch, setSendCommand } = useFlowData();
   const clientRef = useRef(null);
+  const fixture = isFixtureMode();
+  const wsUrl = getWsUrl();
+  const [status, setStatus] = useState(fixture ? 'fixture' : 'connecting');
 
   useEffect(() => {
-    if (isFixtureMode()) {
+    if (fixture) {
       loadFixture(dispatch);
-    } else {
-      const client = createWsClient(
-        getWsUrl(),
-        dispatch,
-        (status) => { /* TODO: expose connection status in UI */ }
-      );
-      clientRef.current = client;
-      setSendCommand((cmd) => client.send(cmd));
-      return () => client.stop();
+      return;
     }
+    const client = createWsClient(wsUrl, dispatch, setStatus);
+    clientRef.current = client;
+    setSendCommand((cmd) => client.send(cmd));
+    return () => client.stop();
   }, []);
 
-  return <ProjectScreen />;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+      <ConnectionBanner status={status} wsUrl={wsUrl} />
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <ProjectScreen />
+      </div>
+    </div>
+  );
 }
 
 createRoot(document.getElementById('root')).render(

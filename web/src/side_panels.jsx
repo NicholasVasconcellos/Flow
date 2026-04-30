@@ -3,7 +3,7 @@ import { I } from './icons.jsx';
 import { PhasePill, ContextDonut, formatK, formatCost } from './primitives.jsx';
 import { useFlowData } from './FlowDataContext.jsx';
 
-// Context Charts, Learnings, Notifications, Suggestions panels
+// Context Charts, Learnings, Notifications panels
 
 const ContextChartsPanel = () => {
   const { TASKS, SESSIONS } = useFlowData();
@@ -216,46 +216,4 @@ const NotificationsPanel = () => {
   );
 };
 
-const SuggestionsPanel = () => {
-  const { SUGGESTIONS, TASKS } = useFlowData();
-  const byTask = {};
-  SUGGESTIONS.forEach(s => (byTask[s.taskId] ||= []).push(s));
-  return (
-    <div style={{ padding: "8px 10px" }}>
-      {Object.entries(byTask).map(([taskId, items]) => {
-        const task = TASKS.find(t => t.id === taskId);
-        return (
-          <div key={taskId} style={{ marginBottom: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, margin: "4px 4px 6px" }}>
-              <PhasePill phase={task?.phase || "execute"}/>
-              <span style={{ fontSize: 11.5, color: "var(--text-1)", fontWeight: 500 }}>{task?.title}</span>
-            </div>
-            {items.map(s => (
-              <div key={s.id} style={{
-                padding: "10px 12px",
-                background: "var(--bg-2)",
-                border: "1px solid var(--border-1)",
-                borderLeft: "2px solid var(--purple)",
-                borderRadius: "var(--r-sm)",
-                marginBottom: 4,
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                  <I.Lightbulb size={12} className="ic"/>
-                  <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text-1)" }}>{s.title}</span>
-                  <span className="badge purple" style={{ marginLeft: "auto", fontSize: 10 }}>effort: {s.effort}</span>
-                </div>
-                <div style={{ color: "var(--text-2)", lineHeight: 1.5, fontSize: 11.5 }}>{s.body}</div>
-                <div style={{ marginTop: 6, display: "flex", gap: 6 }}>
-                  <button className="btn sm">Dismiss</button>
-                  <button className="btn sm">Create task</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        );
-      })}
-    </div>
-  );
-};
-
-export { ContextChartsPanel, LearningsPanel, NotificationsPanel, SuggestionsPanel };
+export { ContextChartsPanel, LearningsPanel, NotificationsPanel };

@@ -67,5 +67,5 @@ export function getWsUrl() {
 
 export function isFixtureMode() {
   const params = new URLSearchParams(window.location.search);
-  return params.has('fixture') || !params.has('ws');
+  return params.has('fixture');
 }

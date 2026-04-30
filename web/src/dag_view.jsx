@@ -3,26 +3,18 @@ import { I } from './icons.jsx';
 
 // DAG View — hierarchical top-to-bottom graph of tasks
 
-const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, showAll, onToggleShowAll }) => {
+export const ALL_STATUSES = ["pending", "ready", "running", "paused", "blocked", "done", "merged"];
+
+const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter, onChangeStatusFilter }) => {
   // Layout the DAG by phase (rows) and distribute x
   const phaseOrder = ["root", "spec", "execute", "test", "review", "document"];
   const byPhase = {};
   phaseOrder.forEach(p => byPhase[p] = []);
   tasks.forEach(t => (byPhase[t.phase] ||= []).push(t));
 
-  // Filter if not showAll: only "ready" + running + their immediate deps for context
+  // Filter by status: only render tasks whose status is in the active set.
   const visibleIds = new Set();
-  if (showAll) {
-    tasks.forEach(t => visibleIds.add(t.id));
-  } else {
-    tasks.forEach(t => {
-      if (t.status === "ready" || t.status === "running") {
-        visibleIds.add(t.id);
-        t.deps.forEach(d => visibleIds.add(d));
-      }
-    });
-    if (visibleIds.size === 0) tasks.forEach(t => visibleIds.add(t.id));
-  }
+  tasks.forEach(t => { if (statusFilter.has(t.status)) visibleIds.add(t.id); });
 
   // Compute layout positions
   const ROW_H = 110;
@@ -80,7 +72,7 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, showAll, onT
   React.useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollLeft = Math.max(0, (el.scrollWidth - el.clientWidth) / 2);
-  }, [showAll]);
+  }, [statusFilter]);
 
   // Zoom around a focal point (client coords); keeps the point under the cursor stable
   const zoomAt = React.useCallback((nextZoom, clientX, clientY) => {
@@ -291,28 +283,7 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, showAll, onT
             );
           })}
         </div>
-        <div style={{ display: "inline-flex", pointerEvents: "auto", background: "var(--bg-1)", border: "1px solid var(--border-2)", borderRadius: "var(--r-md)", padding: 2 }}>
-          <button className="btn sm" onClick={() => onToggleShowAll(false)}
-            title="Ready only"
-            style={{
-              background: !showAll ? "var(--bg-3)" : "transparent",
-              border: "none", color: !showAll ? "var(--text-1)" : "var(--text-3)",
-              borderRadius: 4, padding: "4px 7px", fontSize: 11.5,
-              display: "inline-flex", alignItems: "center", gap: 4,
-            }}>
-            <I.Zap size={11}/> Ready
-          </button>
-          <button className="btn sm" onClick={() => onToggleShowAll(true)}
-            title="All tasks"
-            style={{
-              background: showAll ? "var(--bg-3)" : "transparent",
-              border: "none", color: showAll ? "var(--text-1)" : "var(--text-3)",
-              borderRadius: 4, padding: "4px 7px", fontSize: 11.5,
-              display: "inline-flex", alignItems: "center", gap: 4,
-            }}>
-            <I.List size={11}/> All
-          </button>
-        </div>
+        <StatusFilterButton tasks={tasks} statusFilter={statusFilter} onChange={onChangeStatusFilter}/>
         <div style={{ pointerEvents: "auto", fontSize: 11.5, color: "var(--text-3)" }}>
           {visibleTasks.length} of {tasks.length} tasks
         </div>
@@ -452,8 +423,13 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, showAll, onT
                 left: pos.x - 100 + off.dx, top: pos.y - 32 + off.dy,
                 width: 200, minHeight: 64,
                 background: isSel ? "var(--bg-3)" : "var(--bg-1)",
-                border: `1px solid ${isSel ? phaseMeta.color : isHov ? "var(--border-3)" : "var(--border-2)"}`,
-                borderLeft: `3px solid ${phaseMeta.color}`,
+                borderStyle: "solid",
+                borderColor: isSel ? phaseMeta.color : isHov ? "var(--border-3)" : "var(--border-2)",
+                borderTopWidth: 1,
+                borderRightWidth: 1,
+                borderBottomWidth: 1,
+                borderLeftWidth: 3,
+                borderLeftColor: phaseMeta.color,
                 borderRadius: "var(--r-md)",
                 boxShadow: isDragging ? "var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.35))" : isSel ? `0 0 0 3px ${phaseMeta.color}22, var(--shadow-md)` : isHov ? "var(--shadow-md)" : "none",
                 cursor: isDragging ? "grabbing" : "grab",
@@ -498,5 +474,102 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, showAll, onT
     </div>
   );
 };
+
+function StatusFilterButton({ tasks, statusFilter, onChange }) {
+  const [open, setOpen] = React.useState(false);
+  const wrapRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (!wrapRef.current?.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const counts = React.useMemo(() => {
+    const c = {};
+    tasks.forEach(t => { c[t.status] = (c[t.status] || 0) + 1; });
+    return c;
+  }, [tasks]);
+
+  const meta = window.FLOW_DATA?.STATUS_META || {};
+  const totalActive = statusFilter.size;
+  const isAll = totalActive === ALL_STATUSES.length;
+
+  const toggle = (status) => {
+    const next = new Set(statusFilter);
+    if (next.has(status)) next.delete(status); else next.add(status);
+    onChange(next);
+  };
+  const setAll = (on) => onChange(on ? new Set(ALL_STATUSES) : new Set());
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative", pointerEvents: "auto" }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        title="Filter tasks by status"
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 5,
+          background: open ? "var(--bg-3)" : "var(--bg-1)",
+          border: "1px solid var(--border-2)",
+          borderRadius: "var(--r-md)",
+          padding: "4px 8px",
+          color: isAll ? "var(--text-3)" : "var(--text-1)",
+          fontSize: 11.5,
+          cursor: "pointer",
+        }}>
+        <I.Filter size={11}/>
+        <span>{isAll ? "Filter" : `${totalActive} of ${ALL_STATUSES.length}`}</span>
+      </button>
+      {open && (
+        <div style={{
+          position: "absolute",
+          top: "calc(100% + 4px)",
+          left: 0,
+          minWidth: 220,
+          background: "var(--bg-2)",
+          border: "1px solid var(--border-2)",
+          borderRadius: "var(--r-md)",
+          boxShadow: "var(--shadow-md)",
+          padding: 6,
+          zIndex: 20,
+          display: "flex", flexDirection: "column", gap: 2,
+        }}>
+          <div style={{ display: "flex", gap: 4, padding: "2px 4px 6px", borderBottom: "1px solid var(--border-1)", marginBottom: 4 }}>
+            <button className="btn sm" onClick={() => setAll(true)} style={{ flex: 1, fontSize: 11 }}>Show all</button>
+            <button className="btn sm" onClick={() => setAll(false)} style={{ flex: 1, fontSize: 11 }}>Hide all</button>
+          </div>
+          {ALL_STATUSES.map(s => {
+            const m = meta[s] || { label: s, dot: "idle" };
+            const checked = statusFilter.has(s);
+            const count = counts[s] || 0;
+            return (
+              <label key={s} style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "5px 6px",
+                borderRadius: 4,
+                cursor: "pointer",
+                color: checked ? "var(--text-1)" : "var(--text-3)",
+                background: "transparent",
+              }}
+                onMouseEnter={(e) => e.currentTarget.style.background = "var(--bg-3)"}
+                onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggle(s)}
+                  style={{ accentColor: "var(--accent)" }}
+                />
+                <span className={`dot ${m.dot}`} style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0 }}/>
+                <span style={{ fontSize: 11.5, flex: 1 }}>{m.label}</span>
+                <span className="mono" style={{ fontSize: 10.5, color: "var(--text-4)" }}>{count}</span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export { DAGView };

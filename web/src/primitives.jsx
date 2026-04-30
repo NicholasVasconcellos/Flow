@@ -90,7 +90,8 @@ const StatusBadge = ({ status }) => {
 
 // Donut chart for context usage
 const ContextDonut = ({ used, max, size = 44, stroke = 4, autocompacted = false, showLabel = true }) => {
-  const pct = Math.min(100, Math.round((used / max) * 100));
+  const hasData = used != null && max != null && used > 0;
+  const pct = hasData ? Math.min(100, Math.round((used / max) * 100)) : 0;
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
   const dash = (pct / 100) * c;
@@ -102,22 +103,30 @@ const ContextDonut = ({ used, max, size = 44, stroke = 4, autocompacted = false,
       <div style={{ position: "relative", width: size, height: size }}>
         <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
           <circle cx={size/2} cy={size/2} r={r} stroke="var(--bg-3)" strokeWidth={stroke} fill="none"/>
-          <circle cx={size/2} cy={size/2} r={r} stroke={color} strokeWidth={stroke} fill="none"
-                  strokeDasharray={`${dash} ${c}`} strokeLinecap="round"/>
+          {hasData && (
+            <circle cx={size/2} cy={size/2} r={r} stroke={color} strokeWidth={stroke} fill="none"
+                    strokeDasharray={`${dash} ${c}`} strokeLinecap="round"/>
+          )}
         </svg>
         <div style={{
           position: "absolute", inset: 0,
           display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: labelSize, fontWeight: 600, color: "var(--text-1)",
+          fontSize: labelSize, fontWeight: 600, color: hasData ? "var(--text-1)" : "var(--text-4)",
           fontFamily: "var(--font-mono)",
           lineHeight: 1,
           whiteSpace: "nowrap",
           letterSpacing: "-0.02em",
-        }}>{pct}<span style={{ opacity: 0.7, marginLeft: 1 }}>%</span>{autocompacted && <span style={{ color: "var(--warn)", marginLeft: 1 }}>*</span>}</div>
+        }}>
+          {hasData
+            ? <>{pct}<span style={{ opacity: 0.7, marginLeft: 1 }}>%</span>{autocompacted && <span style={{ color: "var(--warn)", marginLeft: 1 }}>*</span>}</>
+            : <span>—</span>}
+        </div>
       </div>
       {showLabel && (
         <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text-3)" }}>
-          {formatK(used)}<span style={{ color: "var(--text-4)" }}>/{formatK(max)}</span>
+          {hasData
+            ? <>{formatK(used)}<span style={{ color: "var(--text-4)" }}>/{formatK(max)}</span></>
+            : <span style={{ color: "var(--text-4)" }}>no data</span>}
         </div>
       )}
     </div>
