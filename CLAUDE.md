@@ -15,9 +15,11 @@ When you find a problem (in this codebase or surfaced at runtime by Flow driving
    - Reproduction steps or the session/task where it surfaced (when applicable).
    - Suggested fix direction if you have one.
 
-**Log only — do not implement fixes when discovering an issue.** Record the proposed fix in the issue file. Fixes are applied later in a dedicated session.
+**Log only — do not implement fixes when discovering an issue.** Record the proposed fix in the issue file. Fixes are applied later in a dedicated session. Except when the fix is truly trivial, then just do it.
 
-If you have addressed an issue, verified the fix and commit the changes (only the files you worked on), **delete the file from `issues/`** in the same commit (or the immediately following one). The directory should reflect only what is currently open. Don't leave "FIXED" markers or historical entries — git history is the audit trail.
+If you have addressed an issue, verified the fix and commit the changes (only the files you worked on), **safely delete the file from `issues/`**. 
+
+git history is the audit trail of the project, use consise and clear summary and explanations as to why and what.
 
 ### Runtime issues from downstream projects
 
@@ -27,8 +29,7 @@ Flow is an automated workflow setup. When overseeing creation of other projects 
 
 If a problem is specific to the downstream project itself — the agent is stuck on a project decision, doing the wrong thing for that codebase, or chasing the wrong approach — and the workflow harness is behaving correctly, do not log it here. Instead:
 
-1. Nudge the agent in-place by sending a message in the project session. (project's claude.md or relevant internal section)
-2. Append the correction to the project's learnings (.flow/learning/<task-name>)
+1. Append the correction to the project's learnings (.flow/learning/<task-name>)
 
 Reserve `issues/` for things Flow itself should detect, prevent, or recover from.
 
