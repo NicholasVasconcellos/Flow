@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { Paths } from "../src/paths.js";
 import { EventBus } from "../src/events.js";
+import { StateStore } from "../src/state.js";
 import { defaultConfig } from "../src/config.js";
 import {
   AgentRunner,
@@ -107,6 +108,7 @@ function makeFakeSpawner(): FakeSpawnerHandle {
 function makeRunner(
   root: string,
   spawnerHandle: FakeSpawnerHandle,
+  state?: StateStore,
 ): { runner: AgentRunner; paths: Paths; bus: EventBus } {
   const paths = new Paths(root);
   const bus = new EventBus();
@@ -116,6 +118,7 @@ function makeRunner(
     eventBus: bus,
     spawner: spawnerHandle.spawner,
     now: () => new Date(),
+    ...(state ? { state } : {}),
   });
   return { runner, paths, bus };
 }
@@ -1389,4 +1392,48 @@ test("killAllLive swallows errors from individual proc.kill calls", async () => 
 
   await runner.killAllLive("SIGTERM", 0);
   assert.equal(secondKilled, true, "later procs must still be killed after a thrower");
+});
+
+test("ordinal: stable across orchestrator restarts when state is wired", async () => {
+  const root = await mkTmp();
+  const paths = new Paths(root);
+  await writeSkill(paths, "exec", "skill");
+
+  // First run: a fresh runner backed by an empty state assigns ordinal=1.
+  const state1 = new StateStore(paths);
+  await state1.load();
+  const spawner1 = makeFakeSpawner();
+  spawner1.queue.push({
+    stdout: [JSON.stringify({ type: "system", subtype: "init" })],
+    exitCode: 0,
+  });
+  const { runner: runner1 } = makeRunner(root, spawner1, state1);
+  const first = await runner1.spawnAgent({
+    taskId: "TORD",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+  assert.equal(first.ordinal, 1);
+  state1.upsertSession(first);
+  await state1.save();
+
+  // Simulate a restart: brand-new state + runner pair, same on-disk
+  // sessions. The pre-fix behavior reset to ordinal=1 here, colliding
+  // with the persisted run.
+  const state2 = new StateStore(paths);
+  await state2.load();
+  const spawner2 = makeFakeSpawner();
+  spawner2.queue.push({
+    stdout: [JSON.stringify({ type: "system", subtype: "init" })],
+    exitCode: 0,
+  });
+  const { runner: runner2 } = makeRunner(root, spawner2, state2);
+  const second = await runner2.spawnAgent({
+    taskId: "TORD",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+  assert.equal(second.ordinal, 2);
 });

@@ -9,6 +9,7 @@ import { EventBus } from "./events.js";
 import { costFor, resolveEffort, resolveStageConfig } from "./config.js";
 import { newClaudeSessionId, newId } from "./ids.js";
 import { appendJsonl, writeJsonAtomic } from "./atomic.js";
+import type { StateStore } from "./state.js";
 import type {
   Config,
   Effort,
@@ -73,6 +74,12 @@ export interface AgentRunnerDeps {
   paths: Paths;
   config: Config;
   eventBus: EventBus;
+  /** Optional. When provided, ordinals are computed from persisted
+   *  sessions instead of an in-process counter, so `(taskId, stage)`
+   *  numbering survives orchestrator restarts. Tests that don't care
+   *  about ordinal stability can omit this — the runner falls back to
+   *  ordinal=1 when state isn't wired. */
+  state?: StateStore;
   spawner?: ProcessSpawner;
   now?: () => Date;
 }
@@ -877,9 +884,7 @@ export class AgentRunner {
   private readonly eventBus: EventBus;
   private readonly spawner: ProcessSpawner;
   private readonly nowFn: () => Date;
-  /** Per-(taskId, stage) running count of sessions spawned so the UI can
-   *  group repeated runs as "T — exec — 1", "T — exec — 2", etc. */
-  private readonly ordinalCounters = new Map<string, number>();
+  private readonly state: StateStore | undefined;
   /** Currently-live spawned processes. Registered on spawn and removed when
    *  the child exits. Used by `killAllLive` so the SIGINT path can reap any
    *  in-flight agent + its MCP grandchildren before exiting. */
@@ -889,15 +894,25 @@ export class AgentRunner {
     this.paths = deps.paths;
     this.config = deps.config;
     this.eventBus = deps.eventBus;
+    this.state = deps.state;
     this.spawner = deps.spawner ?? execaSpawner;
     this.nowFn = deps.now ?? (() => new Date());
   }
 
+  /** Compute the next UI grouping ordinal for `(taskId, stage)` from the
+   *  persisted session list rather than an in-process counter. This makes
+   *  ordinals stable across orchestrator restarts: a fresh `AgentRunner`
+   *  inspects what's already on disk and resumes numbering from there
+   *  instead of restarting from 1 and clobbering history. */
   private computeOrdinal(taskId: string | null, stage: string): number {
-    const key = `${taskId ?? "_proj"}:${stage}`;
-    const next = (this.ordinalCounters.get(key) ?? 0) + 1;
-    this.ordinalCounters.set(key, next);
-    return next;
+    if (!this.state) return 1;
+    let max = 0;
+    for (const s of this.state.getSessions()) {
+      if (s.taskId !== taskId) continue;
+      if (s.stage !== stage) continue;
+      if (typeof s.ordinal === "number" && s.ordinal > max) max = s.ordinal;
+    }
+    return max + 1;
   }
 
   /** Send `signal` to every currently-live spawned process, then wait up

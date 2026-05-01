@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { promises as fs, readFileSync, unlinkSync } from "node:fs";
 import os from "node:os";
 
 import { ensureDir, readJsonIfExists, writeJsonAtomic } from "./atomic.js";
@@ -79,6 +79,32 @@ export async function releaseLock(
   }
 }
 
+/** Synchronous companion to `releaseLock`, safe to call from
+ *  `process.on("exit", ...)` handlers and the catastrophic
+ *  uncaughtException / unhandledRejection paths where async I/O isn't
+ *  guaranteed to flush. PID-checked so a sibling process that took over
+ *  after a crash doesn't lose its claim to ours. */
+export function releaseLockSync(paths: Paths, expectedPid: number): void {
+  let raw: string;
+  try {
+    raw = readFileSync(paths.orchestratorLock, "utf8");
+  } catch {
+    return;
+  }
+  let lock: OrchestratorLock;
+  try {
+    lock = JSON.parse(raw) as OrchestratorLock;
+  } catch {
+    return;
+  }
+  if (lock.pid !== expectedPid) return;
+  try {
+    unlinkSync(paths.orchestratorLock);
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Try to atomically claim the orchestrator lock. If a live lock owned by a
  *  different process exists, returns `{ conflict }`. If the existing lock is
  *  stale (PID gone, heartbeat old, or wrong host), it's overwritten. */
@@ -95,6 +121,14 @@ export async function acquireLock(
     return { conflict: existing };
   }
   // Either no existing lock, or it's stale, or it's already ours — claim it.
+  // Surface stale-but-present overwrites: leaving this silent makes "why is
+  // there no /tmp/.flow lock" debugging unnecessarily archaeological.
+  if (existing && existing.pid !== process.pid && !isLive(existing)) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[flow] reclaiming stale orchestrator lock (previousPid=${existing.pid}, previousHeartbeatAt=${existing.heartbeatAt}, previousCommand=${existing.command})`,
+    );
+  }
 
   const pid = process.pid;
   const host = os.hostname();

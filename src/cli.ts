@@ -14,7 +14,7 @@ import { loadConfig, mergeConfigPatch, saveConfig } from "./config.js";
 import { readJsonlLines, readJsonIfExists } from "./atomic.js";
 import { topoSort } from "./dag.js";
 import { startWsServer, type WsServer } from "./ws.js";
-import { acquireLock } from "./orchestratorLock.js";
+import { acquireLock, releaseLockSync } from "./orchestratorLock.js";
 import {
   EXIT_FATAL,
   EXIT_LOCK_CONFLICT,
@@ -424,6 +424,41 @@ async function acquireCliLock(
   };
   process.once("SIGINT", onSignal);
   process.once("SIGTERM", onSignal);
+
+  // Synchronous safety nets for catastrophic exit paths the async release
+  // can't survive: an uncaughtException, an unhandledRejection, or a
+  // plain `process.exit()` aborting before the async unlink flushes.
+  // PID-checked inside releaseLockSync so a sibling that took over after
+  // a crash isn't stomped on. Removes the need for outer-supervisor `rm
+  // -f` workarounds documented in the (now-removed) Overnight-Watch.md.
+  const ownerPid = process.pid;
+  const lockPaths = flow.getPaths();
+  const onExit = (): void => {
+    if (released) return;
+    try {
+      clearInterval(heartbeat);
+    } catch {
+      /* ignore */
+    }
+    try {
+      releaseLockSync(lockPaths, ownerPid);
+    } catch {
+      /* ignore */
+    }
+  };
+  process.once("exit", onExit);
+  process.once("uncaughtException", (err) => {
+    // eslint-disable-next-line no-console
+    console.error("[flow] uncaughtException — releasing lock:", err);
+    onExit();
+    process.exit(1);
+  });
+  process.once("unhandledRejection", (reason) => {
+    // eslint-disable-next-line no-console
+    console.error("[flow] unhandledRejection — releasing lock:", reason);
+    onExit();
+    process.exit(1);
+  });
 
   return { release };
 }

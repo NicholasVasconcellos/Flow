@@ -109,14 +109,21 @@ function buildDAG(rawNodes, rawEdges, tasks) {
 }
 
 /**
- * Count existing sessions for the same (taskId, stage) pair.
+ * Pick the next ordinal for `(taskId, stage)` based on the highest ordinal
+ * already seen for that pair. Reading max(ordinal)+1 instead of count+1
+ * survives an out-of-order partial load: if frames arrive for ordinal
+ * 3 before ordinal 1, count-based numbering would re-issue 1 (collision)
+ * while max+1 correctly produces 4. Server-assigned ordinals on each
+ * session are the source of truth; this fallback only kicks in when a
+ * session arrives without one.
  */
 function ordinalFor(sessions, taskId, stage) {
-  let count = 0;
+  let max = 0;
   for (const s of Object.values(sessions)) {
-    if (s.taskId === taskId && s.stage === stage) count++;
+    if (s.taskId !== taskId || s.stage !== stage) continue;
+    if (typeof s.ordinal === "number" && s.ordinal > max) max = s.ordinal;
   }
-  return count + 1;
+  return max + 1;
 }
 
 /**

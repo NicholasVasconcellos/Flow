@@ -626,6 +626,7 @@ export async function createFlow(
       paths,
       config,
       eventBus,
+      state,
     });
 
   const scheduler = new Scheduler({
