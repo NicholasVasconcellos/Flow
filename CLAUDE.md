@@ -2,6 +2,14 @@
 
 Flow is an automated workflow orchestrator that drives multi-stage agent pipelines (spec → exec → review → commit → merge-resolve → docs) across task worktrees. It is the harness under test whenever Flow itself is run against a downstream project (e.g. `pkmn-t8`).
 
+## Subagents
+
+use subagents whenever possible to run paralel tasks or save context window.
+
+## Output
+
+Keep all output text extermely consise and to the point in plain language, sacrifice grammar for the sake of concision
+
 ## Reading Codebase
 
 before reading the codebase reference map.md for an index and summary of each file, use it to know where to find the relevant context.
@@ -19,7 +27,9 @@ When you find a problem (in this codebase or surfaced at runtime by Flow driving
    - Reproduction steps or the session/task where it surfaced (when applicable).
    - Suggested fix direction if you have one.
 
-**Log only — do not implement fixes when discovering an issue.** Record the proposed fix in the issue file. Fixes are applied later in a dedicated session. Except when the fix is truly trivial, then just do it.
+Log Only, unless the fix is very small or trivial.
+
+## Issue closing
 
 If you have addressed an issue, verified the fix and commit the changes (only the files you worked on), **safely delete the file from `issues/`**.
 
@@ -50,6 +60,12 @@ When you hit a subtle bug, framework quirk, or constraint that wasn't obvious fr
    - **Fix pattern:** the shape of the fix (code snippet if useful).
    - **Takeaway:** the generalized rule, so the lesson transfers beyond the specific bug.
 
-Unlike `issues/`, learnings are not deleted once resolved — they are reference material. Update them if your understanding sharpens, but don't churn the file over cosmetic edits.
+Do not delete learnings, they are reference material.
+Update them if your understanding sharpens, but don't churn the file over cosmetic edits.
 
 Scope: things that would surprise a competent reader of the code. Not for general best practices, not for things already documented in framework docs, not for one-off project decisions.
+
+## Plans
+
+Make the plan extremely concise. Sacrifice grammar for the sake of concision.
+At the end of each plan, give me a list of unresolved questions to answer, if any.
