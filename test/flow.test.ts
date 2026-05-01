@@ -183,10 +183,10 @@ test(
 );
 
 // ---------------------------------------------------------------------------
-// Test: replaySession round-trips JSONL from disk
+// Test: ProjectArtifacts.fetch session.events round-trips JSONL from disk
 // ---------------------------------------------------------------------------
 
-test("replaySession streams a session's JSONL back", { timeout: 10000 }, async () => {
+test("getArtifacts().fetch session.events streams a session's JSONL back", { timeout: 10000 }, async () => {
   const root = await mkTmp();
   const paths = new Paths(root);
   await scaffoldFlowDir(paths, ASSETS_DIR);
@@ -222,7 +222,7 @@ test("replaySession streams a session's JSONL back", { timeout: 10000 }, async (
     await appendJsonl(jsonlPath, line);
   }
 
-  // Pre-seed state.json so replaySession can resolve taskId from sessionId.
+  // Pre-seed state.json so ProjectArtifacts can resolve taskId from sessionId.
   const state = {
     version: 1,
     tasks: [
@@ -269,10 +269,9 @@ test("replaySession streams a session's JSONL back", { timeout: 10000 }, async (
     { agent, git: gitHandle.git },
   );
 
-  const iterable = await flow.replaySession(sessionId);
   const events: SessionEvent[] = [];
-  for await (const evt of iterable) {
-    events.push(evt);
+  for await (const chunk of flow.getArtifacts().fetch("session.events", { sessionId })) {
+    events.push(chunk.payload as SessionEvent);
   }
 
   assert.equal(
@@ -312,6 +311,80 @@ test("initFlowProject scaffolds .flow/ on an empty repo", { timeout: 15000 }, as
 // ---------------------------------------------------------------------------
 // Test: getNextTask returns oldest ready, getReadyTasks returns all ready
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Test: getProject() inlines bounded notifications/learnings/taskArtifacts
+// (Step 4 cold-load inlines)
+// ---------------------------------------------------------------------------
+
+test("getProject inlines bounded notifications, learnings and per-task artifacts", { timeout: 15000 }, async () => {
+  const root = await mkTmp();
+  const paths = new Paths(root);
+  await scaffoldFlowDir(paths, ASSETS_DIR);
+
+  // 600 notifications — exceeds the 500-entry cap so notificationsTruncated=true.
+  await fs.mkdir(path.dirname(paths.notificationsJsonl), { recursive: true });
+  for (let i = 0; i < 600; i++) {
+    const n = {
+      id: `n-${i}`,
+      severity: "info",
+      title: `notif ${i}`,
+      body: "x",
+      createdAt: new Date(2026, 0, 1, 0, 0, i).toISOString(),
+      acknowledged: false,
+    };
+    await appendJsonl(paths.notificationsJsonl, n);
+  }
+
+  // 5 learning files — one oversized (>128 KiB) so its `truncated` flag flips.
+  await fs.mkdir(paths.learningsDir, { recursive: true });
+  for (let i = 0; i < 4; i++) {
+    await fs.writeFile(paths.learningFile(`task-${i}`), `# small learning ${i}\nbody`, "utf8");
+  }
+  const big = "x".repeat(150 * 1024);
+  await fs.writeFile(paths.learningFile("task-big"), big, "utf8");
+
+  // 2 tasks — write progress.txt for one and verify.log marker for the other.
+  const tasksFile: TasksFile = {
+    tasks: [
+      { id: "t1", title: "T1", description: "", contextFiles: [], requires: [], hasUI: false, hasSpec: true, hasCodeReview: true },
+      { id: "t2", title: "T2", description: "", contextFiles: [], requires: [], hasUI: false, hasSpec: true, hasCodeReview: true },
+    ],
+  };
+  await fs.writeFile(paths.tasksJson, JSON.stringify(tasksFile), "utf8");
+  await fs.mkdir(paths.taskDir("t1"), { recursive: true });
+  await fs.writeFile(paths.taskProgressTxt("t1"), "doing things\n", "utf8");
+  await fs.mkdir(paths.taskDir("t2"), { recursive: true });
+  await fs.writeFile(paths.taskVerifyLog("t2"), "verify ran\n", "utf8");
+
+  const gitHandle = makeFakeGit(root);
+  const agent = makeFakeAgent(paths, gitHandle.bumpHead);
+  const flow = await createFlow(
+    { projectPath: root },
+    { agent, git: gitHandle.git },
+  );
+
+  const project = await flow.getProject();
+
+  assert.equal(project.notifications.length, 500, "should be capped at 500 entries");
+  assert.equal(project.notificationsTruncated, true);
+
+  const big_ = project.learnings.find((l) => l.taskId === "task-big");
+  assert.ok(big_, "expected oversized learning entry");
+  assert.equal(big_!.truncated, true);
+  // Body bounded to LEARNING_MAX_BYTES (128 KiB) when truncated.
+  assert.ok(Buffer.byteLength(big_!.markdown, "utf8") <= 128 * 1024);
+  // Small learnings are not flagged truncated.
+  const small0 = project.learnings.find((l) => l.taskId === "task-0");
+  assert.ok(small0);
+  assert.equal(small0!.truncated, undefined);
+
+  assert.equal(project.taskArtifacts["t1"]?.progress, "doing things\n");
+  assert.equal(project.taskArtifacts["t1"]?.verifyLogPresent, false);
+  assert.equal(project.taskArtifacts["t2"]?.verifyLogPresent, true);
+
+  flow.stop();
+});
 
 test("getNextTask + getReadyTasks pick oldest ready task", { timeout: 10000 }, async () => {
   const root = await mkTmp();

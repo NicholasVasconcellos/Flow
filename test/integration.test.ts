@@ -233,9 +233,9 @@ function makeFakeAgent(
       // Emit session.started (what real AgentRunner does) so WS broadcasts it.
       bus.emit("session.started", { session: { ...base, status: "running" } });
 
-      // Write synthetic stream-json lines to the task-scoped JSONL, and also
-      // to the project-level path as a workaround for a replaySession gap
-      // (see bug note in the report).
+      // Write synthetic stream-json lines to both the task-scoped JSONL and
+      // the project-level path so artifact.fetch session.events can find them
+      // regardless of which path it picks first.
       const taskJsonl = paths.sessionJsonl(args.taskId, sessionId);
       const projectJsonl = paths.projectSessionJsonl(sessionId);
       const events: Array<Record<string, unknown>> = [
@@ -539,18 +539,21 @@ test(
         );
       }
 
-      // --- replaySession round-trip ---------------------------------------
-      // Our fake wrote JSONL to project-level path too, to work around a
-      // replaySession resolution gap (noted in the report).
+      // --- artifact.fetch session.events round-trip -----------------------
+      // Our fake wrote JSONL to project-level path too, to work around the
+      // task-vs-project session path resolution path (noted in the report).
       const someCall = agent2.calls.find((c) => c.taskId !== null);
       assert.ok(someCall, "expected at least one task-level session call");
       const replayed: SessionEvent[] = [];
-      const it = await flow.replaySession(someCall.sessionId);
-      for await (const ev of it) replayed.push(ev);
+      for await (const chunk of flow
+        .getArtifacts()
+        .fetch("session.events", { sessionId: someCall.sessionId })) {
+        replayed.push(chunk.payload as SessionEvent);
+      }
       assert.equal(
         replayed.length,
         3,
-        `replaySession should yield 3 synthetic events, got ${replayed.length}`,
+        `artifact.fetch session.events should yield 3 synthetic events, got ${replayed.length}`,
       );
       assert.equal(replayed[0]!.kind, "system");
       assert.equal(replayed[1]!.kind, "assistant_text");
@@ -667,7 +670,7 @@ async function connectWs(port: number): Promise<WsClient> {
 }
 
 test(
-  "integration: websocket server broadcasts pipeline events, config.update, session.replay",
+  "integration: websocket server broadcasts pipeline events, config.update, artifact.fetch session.events",
   { timeout: 30000 },
   async () => {
     const { root, paths, taskIds } = await createFixture("ws");
@@ -799,29 +802,31 @@ test(
         "config broadcasts should grow after config.update",
       );
 
-      // --- session.replay: send with a known sessionId, expect events ---
+      // --- artifact.fetch session.events: streams artifact.chunk frames --
       const someCall = agent.calls.find((c) => c.taskId !== null);
       assert.ok(someCall, "must have recorded at least one task session");
-      const preReplay = client.messages.filter(
-        (m) => m.type === "session.event",
+      const preChunks = client.messages.filter(
+        (m) => m.type === "artifact.chunk",
       ).length;
       client.send({
-        type: "session.replay",
-        sessionId: someCall.sessionId,
+        type: "artifact.fetch",
+        fetchId: "replay-1",
+        kind: "session.events",
+        ids: { sessionId: someCall.sessionId },
         requestId: "replay-1",
       });
       await client.waitFor(
-        () =>
-          client!.messages.filter((m) => m.type === "session.event").length >
-          preReplay,
+        (m) =>
+          m.type === "artifact.end" &&
+          (m as { fetchId: string }).fetchId === "replay-1",
         5000,
       );
-      const postReplay = client.messages.filter(
-        (m) => m.type === "session.event",
+      const postChunks = client.messages.filter(
+        (m) => m.type === "artifact.chunk",
       ).length;
       assert.ok(
-        postReplay - preReplay >= 1,
-        `session.replay should yield >=1 new session.event (got ${postReplay - preReplay})`,
+        postChunks - preChunks >= 1,
+        `artifact.fetch session.events should yield >=1 chunk (got ${postChunks - preChunks})`,
       );
     } finally {
       if (client) await client.close();

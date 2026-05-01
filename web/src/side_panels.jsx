@@ -2,6 +2,7 @@ import React from 'react';
 import { I } from './icons.jsx';
 import { StagePill, ContextDonut, formatK, formatCost } from './primitives.jsx';
 import { useFlowData } from './FlowDataContext.jsx';
+import { useArtifact } from './useArtifact.js';
 
 // Context Charts, Learnings, Notifications panels
 
@@ -165,7 +166,10 @@ const LearningsPanel = () => {
 };
 
 const NotificationsPanel = () => {
-  const { NOTIFICATIONS, TASKS } = useFlowData();
+  const { NOTIFICATIONS, NOTIFICATIONS_TRUNCATED, TASKS } = useFlowData();
+  const [loadOlder, setLoadOlder] = React.useState(false);
+  // Mounting LoadOlderTrigger fires the artifact.fetch via useArtifact at render
+  // time (declarative). The button just toggles the trigger into the tree.
   return (
     <div style={{ padding: "8px 10px" }}>
       {NOTIFICATIONS.length === 0 && (
@@ -212,8 +216,30 @@ const NotificationsPanel = () => {
           </div>
         );
       })}
+      {NOTIFICATIONS_TRUNCATED && (
+        <div style={{ padding: "8px 10px", textAlign: "center" }}>
+          {!loadOlder ? (
+            <button className="btn sm" onClick={() => setLoadOlder(true)}>
+              Load older notifications
+            </button>
+          ) : (
+            <LoadOlderNotificationsTrigger/>
+          )}
+        </div>
+      )}
     </div>
   );
+};
+
+const LoadOlderNotificationsTrigger = () => {
+  const entry = useArtifact('project.notifications', {});
+  if (!entry || entry.status === 'loading') {
+    return <span style={{ color: "var(--text-4)", fontSize: 11 }}>Loading older notifications…</span>;
+  }
+  if (entry.status === 'error') {
+    return <span style={{ color: "var(--err)", fontSize: 11 }}>Error: {entry.error}</span>;
+  }
+  return null;
 };
 
 export { ContextChartsPanel, LearningsPanel, NotificationsPanel };

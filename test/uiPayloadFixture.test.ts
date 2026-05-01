@@ -55,7 +55,7 @@ const EXPECTED_CLIENT_COMMAND_TYPES = [
   "task.retry",
   "task.cancel",
   "task.resume",
-  "session.replay",
+  "artifact.fetch",
   "notification.ack",
   "config.get",
   "config.update",

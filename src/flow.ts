@@ -22,7 +22,7 @@ import {
 } from "./config.js";
 import { buildDag as buildDagFromTasks } from "./dag.js";
 import { newId } from "./ids.js";
-import { readJsonlLines } from "./atomic.js";
+import { ProjectArtifacts, toSessionEvent } from "./artifacts.js";
 import type {
   Config,
   Dag,
@@ -30,11 +30,16 @@ import type {
   EventName,
   Notification,
   Project,
+  ProjectLearning,
   ProjectStatus,
   Session,
-  SessionEvent,
+  TaskArtifacts,
   TaskRuntime,
 } from "./types.js";
+
+// Re-export for downstream callers that previously imported the helper from
+// flow.ts before it was lifted.
+export { toSessionEvent };
 
 // ---------------------------------------------------------------------------
 // Public Flow interface
@@ -67,10 +72,10 @@ export interface Flow {
   ensureTasksLoaded(): Promise<void>;
   stop(): void;
   shutdown(message?: string): Promise<void>;
-  getProject(): Project;
+  getProject(): Promise<Project>;
   getEventBus(): EventBus;
   getPaths(): Paths;
-  replaySession(sessionId: string): Promise<AsyncIterable<SessionEvent>>;
+  getArtifacts(): ProjectArtifacts;
   listNotifications(): Promise<Notification[]>;
   ackNotification(id: string): Promise<void>;
 }
@@ -113,6 +118,7 @@ class FlowImpl implements Flow {
   private readonly git: GitManager;
   private readonly agent: AgentRunner;
   private readonly scheduler: Scheduler;
+  private readonly artifacts: ProjectArtifacts;
   private config: Config;
   private readonly projectPath: string;
   private readonly assetsDir: string;
@@ -142,6 +148,7 @@ class FlowImpl implements Flow {
     this.agent = opts.agent;
     this.scheduler = opts.scheduler;
     this.gitRemote = opts.gitRemote;
+    this.artifacts = new ProjectArtifacts(opts.paths, opts.state);
   }
 
   // --- lifecycle ---------------------------------------------------------
@@ -153,7 +160,7 @@ class FlowImpl implements Flow {
   async loadProject(_projectPath: string): Promise<Project> {
     // `_projectPath` is accepted per the interface contract but createFlow is
     // always bound to a specific root; honor the bound root instead.
-    return this.getProject();
+    return await this.getProject();
   }
 
   // --- tasks -------------------------------------------------------------
@@ -298,12 +305,12 @@ class FlowImpl implements Flow {
     await this.scheduler.pauseAllRunning(message);
   }
 
-  getProject(): Project {
+  async getProject(): Promise<Project> {
     return buildProjectSnapshot(
       this.projectPath,
+      this.paths,
       this.config,
-      this.state.getTasks(),
-      this.state.getSessions(),
+      this.state,
       "ready",
       this.gitRemote,
     );
@@ -317,40 +324,8 @@ class FlowImpl implements Flow {
     return this.paths;
   }
 
-  async replaySession(sessionId: string): Promise<AsyncIterable<SessionEvent>> {
-    const session = this.state.getSession(sessionId);
-    const taskId = session?.taskId ?? null;
-    const jsonlPath = this.paths.sessionJsonl(taskId, sessionId);
-    // If we didn't find it in state and task-scoped path doesn't exist, fall
-    // back to project-level path.
-    const primary = jsonlPath;
-    const fallback = this.paths.projectSessionJsonl(sessionId);
-
-    const now = (): string => new Date().toISOString();
-    const pickPath = async (): Promise<string | null> => {
-      try {
-        await fs.access(primary);
-        return primary;
-      } catch {
-        /* try fallback */
-      }
-      try {
-        await fs.access(fallback);
-        return fallback;
-      } catch {
-        return null;
-      }
-    };
-
-    async function* iter(): AsyncIterable<SessionEvent> {
-      const p = await pickPath();
-      if (!p) return;
-      for await (const raw of readJsonlLines<unknown>(p)) {
-        const event = toSessionEvent(raw, sessionId, now());
-        if (event) yield event;
-      }
-    }
-    return iter();
+  getArtifacts(): ProjectArtifacts {
+    return this.artifacts;
   }
 
   async listNotifications(): Promise<Notification[]> {
@@ -366,70 +341,24 @@ class FlowImpl implements Flow {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function toSessionEvent(
-  raw: unknown,
-  sessionId: string,
-  fallbackTs: string,
-): SessionEvent | null {
-  if (!raw || typeof raw !== "object") return null;
-  const obj = raw as Record<string, unknown>;
-
-  // Already-shaped SessionEvent?
-  if (
-    typeof obj["sessionId"] === "string" &&
-    typeof obj["kind"] === "string" &&
-    typeof obj["ts"] === "string" &&
-    "payload" in obj
-  ) {
-    return obj as unknown as SessionEvent;
-  }
-
-  // Raw Claude Code stream-json payload — infer a minimal event envelope.
-  const ts =
-    typeof obj["timestamp"] === "string"
-      ? (obj["timestamp"] as string)
-      : typeof obj["ts"] === "string"
-        ? (obj["ts"] as string)
-        : fallbackTs;
-
-  return {
-    sessionId,
-    ts,
-    kind: inferKind(obj),
-    payload: obj,
-  };
-}
-
-function inferKind(payload: Record<string, unknown>): SessionEvent["kind"] {
-  const type = payload["type"];
-  switch (type) {
-    case "system":
-      return "system";
-    case "tool_use":
-      return "tool_use";
-    case "tool_result":
-      return "tool_result";
-    case "usage":
-    case "result":
-      return "usage";
-    case "stop":
-      return "stop";
-    case "assistant":
-      return "assistant_text";
-    default:
-      return "system";
-  }
-}
-
-function buildProjectSnapshot(
+async function buildProjectSnapshot(
   projectPath: string,
+  paths: Paths,
   config: Config,
-  tasks: TaskRuntime[],
-  sessions: Session[],
+  state: StateStore,
   status: ProjectStatus,
   gitRemote: string | null,
-): Project {
+): Promise<Project> {
+  const tasks = state.getTasks();
+  const sessions = state.getSessions();
   const dag = buildDagFromTasks(tasks);
+
+  const [notifResult, learnings, taskArtifacts] = await Promise.all([
+    readNotificationsBounded(paths),
+    readLearningsBounded(paths),
+    readAllTaskArtifacts(paths, tasks),
+  ]);
+
   return {
     name: path.basename(projectPath),
     path: projectPath,
@@ -439,7 +368,202 @@ function buildProjectSnapshot(
     sessions,
     dag,
     gitRemote,
+    notifications: notifResult.entries,
+    notificationsTruncated: notifResult.truncated,
+    learnings,
+    taskArtifacts,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Bounded artifact readers — used by buildProjectSnapshot to inline a
+// size-capped snapshot of disk state into project.state. Caps per
+// cross-cutting decision #3 of the implementation plan; unbounded artifacts
+// (verify.log, full session events) stay lazy via artifact.fetch.
+// ---------------------------------------------------------------------------
+
+const NOTIFICATIONS_MAX_ENTRIES = 500;
+const NOTIFICATIONS_MAX_BYTES = 256 * 1024;
+const LEARNING_MAX_BYTES = 128 * 1024;
+const TASK_TEXT_MAX_BYTES = 32 * 1024;
+
+async function readBounded(
+  filePath: string,
+  byteCap: number,
+): Promise<{ text: string; truncated: boolean } | null> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(filePath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+  if (Buffer.byteLength(raw, "utf8") <= byteCap) {
+    return { text: raw, truncated: false };
+  }
+  // Slice on UTF-8 byte cap, then drop the trailing partial char if any.
+  const buf = Buffer.from(raw, "utf8").subarray(0, byteCap);
+  return { text: buf.toString("utf8"), truncated: true };
+}
+
+async function readNotificationsBounded(
+  paths: Paths,
+): Promise<{ entries: Notification[]; truncated: boolean }> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(paths.notificationsJsonl, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { entries: [], truncated: false };
+    }
+    throw err;
+  }
+  // Same fold semantics as StateStore.listNotifications: dedup by id, last
+  // write wins (so an `acknowledged: true` rewrite shadows the original).
+  const byId = new Map<string, Notification>();
+  let total = 0;
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as Notification;
+      byId.set(parsed.id, parsed);
+      total += 1;
+    } catch {
+      /* skip malformed lines — same as readJsonlLines */
+    }
+  }
+  const all = Array.from(byId.values());
+  // Sort oldest → newest, then take the trailing window.
+  all.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  let truncated = false;
+  let trimmed = all;
+  if (trimmed.length > NOTIFICATIONS_MAX_ENTRIES) {
+    trimmed = trimmed.slice(-NOTIFICATIONS_MAX_ENTRIES);
+    truncated = true;
+  }
+  // Byte-budget tighten: drop oldest until under cap.
+  while (trimmed.length > 0) {
+    const bytes = Buffer.byteLength(JSON.stringify(trimmed), "utf8");
+    if (bytes <= NOTIFICATIONS_MAX_BYTES) break;
+    trimmed = trimmed.slice(1);
+    truncated = true;
+  }
+  void total;
+  return { entries: trimmed, truncated };
+}
+
+async function readLearningsBounded(paths: Paths): Promise<ProjectLearning[]> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(paths.learningsDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
+  }
+  const out: ProjectLearning[] = [];
+  for (const name of entries.sort()) {
+    if (!name.endsWith(".md")) continue;
+    const taskId = name.replace(/\.md$/, "");
+    const filePath = path.join(paths.learningsDir, name);
+    const r = await readBounded(filePath, LEARNING_MAX_BYTES);
+    if (!r) continue;
+    const entry: ProjectLearning = {
+      taskId,
+      path: filePath,
+      markdown: r.text,
+    };
+    if (r.truncated) entry.truncated = true;
+    out.push(entry);
+  }
+  return out;
+}
+
+async function readAllTaskArtifacts(
+  paths: Paths,
+  tasks: TaskRuntime[],
+): Promise<Record<string, TaskArtifacts>> {
+  const out: Record<string, TaskArtifacts> = {};
+  await Promise.all(
+    tasks.map(async (t) => {
+      const artifacts = await readTaskArtifacts(paths, t.id);
+      // Keep the snapshot small — only emit entries that have *something*
+      // worth inlining beyond the all-default skeleton.
+      const hasContent =
+        artifacts.progress !== undefined ||
+        artifacts.summary !== undefined ||
+        artifacts.learningsDraft !== undefined ||
+        artifacts.roundIssues.length > 0 ||
+        artifacts.screenshots.length > 0 ||
+        artifacts.verifyLogPresent;
+      if (hasContent) out[t.id] = artifacts;
+    }),
+  );
+  return out;
+}
+
+async function readTaskArtifacts(
+  paths: Paths,
+  taskId: string,
+): Promise<TaskArtifacts> {
+  const [progress, summary, learningsDraft, issues, screenshots, verifyExists] =
+    await Promise.all([
+      readBounded(paths.taskProgressTxt(taskId), TASK_TEXT_MAX_BYTES),
+      readBounded(paths.taskSummary(taskId), TASK_TEXT_MAX_BYTES),
+      readBounded(paths.taskLearningsDraft(taskId), TASK_TEXT_MAX_BYTES),
+      listRoundIssues(paths, taskId),
+      listScreenshots(paths, taskId),
+      fileExists(paths.taskVerifyLog(taskId)),
+    ]);
+  const result: TaskArtifacts = {
+    roundIssues: issues,
+    screenshots,
+    verifyLogPresent: verifyExists,
+  };
+  if (progress) result.progress = progress.text;
+  if (summary) result.summary = summary.text;
+  if (learningsDraft) result.learningsDraft = learningsDraft.text;
+  return result;
+}
+
+async function listRoundIssues(
+  paths: Paths,
+  taskId: string,
+): Promise<TaskArtifacts["roundIssues"]> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(paths.taskIssuesDir(taskId));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
+  }
+  const out: TaskArtifacts["roundIssues"] = [];
+  for (const name of entries) {
+    const m = /^round-(\d+)-issues\.md$/.exec(name);
+    if (!m) continue;
+    out.push({ round: Number(m[1]), filename: name });
+  }
+  out.sort((a, b) => a.round - b.round);
+  return out;
+}
+
+async function listScreenshots(paths: Paths, taskId: string): Promise<string[]> {
+  try {
+    const entries = await fs.readdir(paths.taskScreenshotsDir(taskId));
+    return entries.sort();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
+  }
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -541,11 +665,14 @@ export async function createFlow(
 
   // Emit project.state once.
   queueMicrotask(() => {
-    try {
-      eventBus.emit("project.state", { project: flow.getProject() });
-    } catch {
-      /* ignore */
-    }
+    void (async () => {
+      try {
+        const project = await flow.getProject();
+        eventBus.emit("project.state", { project });
+      } catch {
+        /* ignore */
+      }
+    })();
   });
 
   return flow;

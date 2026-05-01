@@ -352,6 +352,26 @@ export const DagSchema = z.object({
 });
 export type Dag = z.infer<typeof DagSchema>;
 
+export const ProjectLearningSchema = z.object({
+  taskId: z.string(),
+  path: z.string(),
+  markdown: z.string(),
+  truncated: z.boolean().optional(),
+});
+export type ProjectLearning = z.infer<typeof ProjectLearningSchema>;
+
+export const TaskArtifactsSchema = z.object({
+  progress: z.string().optional(),
+  summary: z.string().optional(),
+  learningsDraft: z.string().optional(),
+  roundIssues: z
+    .array(z.object({ round: z.number(), filename: z.string() }))
+    .default([]),
+  screenshots: z.array(z.string()).default([]),
+  verifyLogPresent: z.boolean().default(false),
+});
+export type TaskArtifacts = z.infer<typeof TaskArtifactsSchema>;
+
 export const ProjectSchema = z.object({
   name: z.string(),
   path: z.string(),
@@ -361,6 +381,14 @@ export const ProjectSchema = z.object({
   sessions: z.array(SessionSchema),
   dag: DagSchema,
   gitRemote: z.string().nullable().optional(),
+  // Cold-load inlines added in step 4: bounded snapshots of disk state so a
+  // freshly-connected client can render history without waiting on lazy
+  // artifact.fetch round-trips. Large artifacts (verify.log, full session
+  // events) stay lazy.
+  notifications: z.array(NotificationSchema).default([]),
+  notificationsTruncated: z.boolean().default(false),
+  learnings: z.array(ProjectLearningSchema).default([]),
+  taskArtifacts: z.record(z.string(), TaskArtifactsSchema).default({}),
 });
 export type Project = z.infer<typeof ProjectSchema>;
 

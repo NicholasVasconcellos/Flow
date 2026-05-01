@@ -638,7 +638,7 @@ export const FLOW_CLIENT_COMMANDS = [
   { type: "task.retry", taskId: readyTask.id, requestId: "task-retry-1" },
   { type: "task.cancel", taskId: runningTask.id, requestId: "task-cancel-1" },
   { type: "task.resume", taskId: readyTask.id, requestId: "task-resume-1" },
-  { type: "session.replay", sessionId: replaySession.id, requestId: "session-replay-1" },
+  { type: "artifact.fetch", fetchId: "session-events-1", kind: "session.events", ids: { sessionId: replaySession.id }, requestId: "artifact-fetch-1" },
   { type: "notification.ack", id: firstNotification?.id ?? "notification-ack", requestId: "notification-ack-1" },
   { type: "config.get", requestId: "config-get-1" },
   { type: "config.update", patch: { retryCount: 1, maxConcurrent: 4 }, requestId: "config-update-1" },

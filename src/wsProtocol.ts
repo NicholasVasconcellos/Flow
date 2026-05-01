@@ -71,8 +71,10 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
     requestId: z.string().optional(),
   }),
   z.object({
-    type: z.literal("session.replay"),
-    sessionId: z.string(),
+    type: z.literal("artifact.fetch"),
+    fetchId: z.string(),
+    kind: z.string(),
+    ids: z.record(z.union([z.string(), z.number()])).default({}),
     requestId: z.string().optional(),
   }),
   z.object({
@@ -131,4 +133,24 @@ export type ServerEvent =
   | { type: "learning"; taskId: string; path: string; markdown: string }
   | { type: "config"; config: Config }
   | { type: "config.stages"; stages: Partial<Record<StageKey, StageOverride>> }
+  | {
+      type: "artifact.chunk";
+      fetchId: string;
+      kind: string;
+      ids: Record<string, string | number>;
+      payload: unknown;
+    }
+  | {
+      type: "artifact.end";
+      fetchId: string;
+      kind: string;
+      ids: Record<string, string | number>;
+    }
+  | {
+      type: "artifact.error";
+      fetchId: string;
+      kind: string;
+      ids: Record<string, string | number>;
+      message: string;
+    }
   | { type: "error"; requestId?: string; message: string };

@@ -18,11 +18,77 @@ export const initialState = {
   SESSIONS_HYDRATED: false,
   LOG_EVENTS: [],
   NOTIFICATIONS: [],
+  NOTIFICATIONS_TRUNCATED: false,
   LEARNINGS: [],
   DAG: { nodes: [], edges: [] },
   TASK_DETAILS: {},
+  ARTIFACTS: {},
+  SKILLS: {},
+  SETUP_NOTES: null,
+  INSTRUCTIONS: null,
+  PLAN_MD: null,
+  // _seenEventKeys is opaque internal state used by the dedup logic that
+  // bridges live session.event frames and artifact.chunk session.events
+  // replays. Per-session Set; never render from this.
+  _seenEventKeys: {},
   errors: [],
 };
+
+// ---------------------------------------------------------------------------
+// Artifact key helpers — keep in lockstep with useArtifact.js. The same
+// `${kind}:${stableIds}` form is used as the ARTIFACTS map key and the
+// inflight key in the hook.
+// ---------------------------------------------------------------------------
+
+export function stableIds(ids) {
+  if (!ids || typeof ids !== 'object') return '{}';
+  const keys = Object.keys(ids).sort();
+  const pairs = keys.map((k) => `${k}=${String(ids[k])}`);
+  return `{${pairs.join(',')}}`;
+}
+
+export function artifactKey(kind, ids) {
+  return `${kind}:${stableIds(ids)}`;
+}
+
+// djb2 — small, fast, non-crypto string hash (12 lines, no dep). Used to
+// shorten the dedup key so we don't keep an O(payload-size) string per event.
+function djb2(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) {
+    h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+  }
+  // Render as unsigned hex so the key is stable across negatives.
+  return (h >>> 0).toString(16);
+}
+
+function eventDedupKey(event) {
+  const { sessionId, ts, kind, payload } = event;
+  return `${sessionId}|${ts}|${kind}|${djb2(JSON.stringify(payload ?? null))}`;
+}
+
+function mergeTaskDetail(state, taskId, patch) {
+  if (!taskId) return state;
+  const prev = state.TASK_DETAILS[taskId] ?? {};
+  return {
+    ...state,
+    TASK_DETAILS: { ...state.TASK_DETAILS, [taskId]: { ...prev, ...patch } },
+  };
+}
+
+function rememberSeenEvent(state, event) {
+  const sid = event.sessionId;
+  const key = eventDedupKey(event);
+  let map = state._seenEventKeys;
+  let bucket = map[sid];
+  if (!bucket) {
+    bucket = new Set();
+    map = { ...map, [sid]: bucket };
+  }
+  if (bucket.has(key)) return null;
+  bucket.add(key);
+  return map;
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -285,6 +351,48 @@ export function applyEvent(state, frame) {
 
       const dag = buildDAG(newDagState.nodes, newDagState.edges, newTasks);
 
+      // Cold-load inlines (Step 4): notifications/learnings/taskArtifacts. Each
+      // merges idempotently with prior state so a re-emitted project.state
+      // (e.g. on reconnect) does not duplicate.
+      let newNotifications = state.NOTIFICATIONS;
+      let newNotificationsTruncated = state.NOTIFICATIONS_TRUNCATED ?? false;
+      if (Array.isArray(project.notifications) && project.notifications.length > 0) {
+        const seenIds = new Set(state.NOTIFICATIONS.map((n) => n.id));
+        const additions = [];
+        for (const raw of project.notifications) {
+          if (seenIds.has(raw.id)) continue;
+          seenIds.add(raw.id);
+          const mapped = mapNotificationSeverity(raw);
+          additions.push({ ...raw, ...mapped });
+        }
+        if (additions.length > 0) newNotifications = [...state.NOTIFICATIONS, ...additions];
+      }
+      if (typeof project.notificationsTruncated === 'boolean') {
+        newNotificationsTruncated = project.notificationsTruncated;
+      }
+
+      let newLearnings = state.LEARNINGS;
+      if (Array.isArray(project.learnings) && project.learnings.length > 0) {
+        const seenPaths = new Set(state.LEARNINGS.map((l) => l.path));
+        const additions = [];
+        for (const raw of project.learnings) {
+          if (seenPaths.has(raw.path)) continue;
+          seenPaths.add(raw.path);
+          const parsed = parseLearning(raw.markdown ?? '');
+          additions.push({ ...raw, ...parsed });
+        }
+        if (additions.length > 0) newLearnings = [...state.LEARNINGS, ...additions];
+      }
+
+      let newTaskDetails = state.TASK_DETAILS;
+      if (project.taskArtifacts && typeof project.taskArtifacts === 'object') {
+        const next = { ...state.TASK_DETAILS };
+        for (const [taskId, artifacts] of Object.entries(project.taskArtifacts)) {
+          next[taskId] = { ...(next[taskId] ?? {}), ...artifacts };
+        }
+        newTaskDetails = next;
+      }
+
       return {
         ...state,
         PROJECT_NAME: project.name ?? state.PROJECT_NAME,
@@ -295,6 +403,10 @@ export function applyEvent(state, frame) {
         SESSIONS: newSessions,
         SESSIONS_HYDRATED: true,
         DAG: dag,
+        NOTIFICATIONS: newNotifications,
+        NOTIFICATIONS_TRUNCATED: newNotificationsTruncated,
+        LEARNINGS: newLearnings,
+        TASK_DETAILS: newTaskDetails,
         [_RAW_DAG_KEY]: newDagState,
       };
     }
@@ -419,10 +531,149 @@ export function applyEvent(state, frame) {
 
     // -----------------------------------------------------------------------
     case 'session.event': {
-      const logEvent = buildLogEvent(frame.event);
-      if (!logEvent) return state;
+      const event = frame.event;
+      const nextSeen = rememberSeenEvent(state, event);
+      // Already seen via this or a prior artifact replay — drop silently.
+      if (nextSeen === null) return state;
+      const logEvent = buildLogEvent(event);
+      if (!logEvent) {
+        // Buildable kinds are dropped (system/usage/stop) but we still want
+        // the dedup map updated so a later artifact.chunk for the same line
+        // doesn't slip through.
+        return { ...state, _seenEventKeys: nextSeen };
+      }
       const withId = { id: `evt-${state.LOG_EVENTS.length}`, ...logEvent };
-      return { ...state, LOG_EVENTS: [...state.LOG_EVENTS, withId] };
+      return {
+        ...state,
+        LOG_EVENTS: [...state.LOG_EVENTS, withId],
+        _seenEventKeys: nextSeen,
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // Artifact streaming — wire family complementing live event broadcasts.
+    // 'artifact.fetch.start' is a synthetic frame dispatched by useArtifact
+    // before sending the wire command, so subsequent useArtifact calls for
+    // the same key see status='loading' and skip re-fetching.
+    case 'artifact.fetch.start': {
+      const key = artifactKey(frame.kind, frame.ids);
+      return {
+        ...state,
+        ARTIFACTS: {
+          ...state.ARTIFACTS,
+          [key]: { status: 'loading', kind: frame.kind, ids: frame.ids },
+        },
+      };
+    }
+
+    case 'artifact.chunk': {
+      const { kind, ids, payload } = frame;
+      switch (kind) {
+        case 'session.events': {
+          // payload is a SessionEvent — route through the same buildLogEvent +
+          // dedup machinery as live session.event frames.
+          const nextSeen = rememberSeenEvent(state, payload);
+          if (nextSeen === null) return state;
+          const logEvent = buildLogEvent(payload);
+          if (!logEvent) return { ...state, _seenEventKeys: nextSeen };
+          const withId = { id: `evt-${state.LOG_EVENTS.length}`, ...logEvent };
+          return {
+            ...state,
+            LOG_EVENTS: [...state.LOG_EVENTS, withId],
+            _seenEventKeys: nextSeen,
+          };
+        }
+        case 'project.notifications': {
+          // Each chunk is one Notification. Dedup by id; live notification
+          // frames may already have appended the same row.
+          const seen = new Set(state.NOTIFICATIONS.map((n) => n.id));
+          if (seen.has(payload.id)) return state;
+          const mapped = mapNotificationSeverity(payload);
+          return {
+            ...state,
+            NOTIFICATIONS: [...state.NOTIFICATIONS, { ...payload, ...mapped }],
+          };
+        }
+        case 'project.learnings': {
+          const seen = new Set(state.LEARNINGS.map((l) => l.path));
+          if (seen.has(payload.path)) return state;
+          const parsed = parseLearning(payload.markdown ?? '');
+          return {
+            ...state,
+            LEARNINGS: [...state.LEARNINGS, { ...payload, ...parsed }],
+          };
+        }
+        case 'project.skill':
+          return {
+            ...state,
+            SKILLS: { ...state.SKILLS, [payload.name]: payload.body ?? '' },
+          };
+        case 'project.skills.list':
+          return {
+            ...state,
+            SKILLS: state.SKILLS[payload.name] !== undefined
+              ? state.SKILLS
+              : { ...state.SKILLS, [payload.name]: null },
+          };
+        case 'project.setup-notes':
+          return { ...state, SETUP_NOTES: payload.body ?? '' };
+        case 'project.instructions':
+          return { ...state, INSTRUCTIONS: payload.body ?? '' };
+        case 'project.plan-md':
+          return { ...state, PLAN_MD: payload.body ?? '' };
+        case 'task.progress':
+          return mergeTaskDetail(state, ids.taskId, { progress: payload.body ?? '' });
+        case 'task.summary':
+          return mergeTaskDetail(state, ids.taskId, { summary: payload.body ?? '' });
+        case 'task.learnings-draft':
+          return mergeTaskDetail(state, ids.taskId, { learningsDraft: payload.body ?? '' });
+        case 'task.round-issues': {
+          const prev = state.TASK_DETAILS[ids.taskId] ?? {};
+          const prevBodies = prev.roundIssuesBodies ?? {};
+          return mergeTaskDetail(state, ids.taskId, {
+            roundIssuesBodies: { ...prevBodies, [payload.round]: payload.body ?? '' },
+          });
+        }
+        case 'task.verify-log':
+          return mergeTaskDetail(state, ids.taskId, { verifyLog: payload.body ?? '' });
+        case 'task.screenshot': {
+          const prev = state.TASK_DETAILS[ids.taskId] ?? {};
+          const prevBlobs = prev.screenshotBlobs ?? {};
+          return mergeTaskDetail(state, ids.taskId, {
+            screenshotBlobs: { ...prevBlobs, [payload.filename]: payload.base64 },
+          });
+        }
+        default:
+          return state;
+      }
+    }
+
+    case 'artifact.end': {
+      const key = artifactKey(frame.kind, frame.ids);
+      const prev = state.ARTIFACTS[key];
+      return {
+        ...state,
+        ARTIFACTS: {
+          ...state.ARTIFACTS,
+          [key]: { ...(prev ?? {}), status: 'loaded', kind: frame.kind, ids: frame.ids },
+        },
+      };
+    }
+
+    case 'artifact.error': {
+      const key = artifactKey(frame.kind, frame.ids);
+      return {
+        ...state,
+        ARTIFACTS: {
+          ...state.ARTIFACTS,
+          [key]: {
+            status: 'error',
+            kind: frame.kind,
+            ids: frame.ids,
+            error: frame.message,
+          },
+        },
+      };
     }
 
     // -----------------------------------------------------------------------

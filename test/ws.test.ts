@@ -3,9 +3,17 @@ import assert from "node:assert/strict";
 
 import { WebSocket } from "ws";
 
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { EventBus } from "../src/events.js";
 import { startWsServer } from "../src/ws.js";
 import { Paths } from "../src/paths.js";
+import { StateStore } from "../src/state.js";
+import { ProjectArtifacts } from "../src/artifacts.js";
+import { appendJsonl } from "../src/atomic.js";
+import { resolveBundledAssetsDir, scaffoldFlowDir } from "../src/setup.js";
 import type { Flow } from "../src/flow.js";
 import type {
   Config,
@@ -13,7 +21,6 @@ import type {
   Notification,
   Project,
   Session,
-  SessionEvent,
   TaskRuntime,
 } from "../src/types.js";
 import type { ServerEvent } from "../src/wsProtocol.js";
@@ -50,6 +57,10 @@ function makeProject(config: Config): Project {
     tasks: [],
     sessions: [],
     dag,
+    notifications: [],
+    notificationsTruncated: false,
+    learnings: [],
+    taskArtifacts: {},
   };
 }
 
@@ -57,7 +68,6 @@ interface FakeFlowState {
   config: Config;
   project: Project;
   bus: EventBus;
-  replayEvents: SessionEvent[];
   lastUpdatedPatch?: unknown;
   stopped: boolean;
   ackCalls: string[];
@@ -74,7 +84,6 @@ function makeFakeFlow(): { flow: Flow; ctx: FakeFlowState } {
     config,
     project: makeProject(config),
     bus,
-    replayEvents: [],
     stopped: false,
     ackCalls: [],
     runOnceCalls: 0,
@@ -150,7 +159,7 @@ function makeFakeFlow(): { flow: Flow; ctx: FakeFlowState } {
     async shutdown() {
       ctx.stopped = true;
     },
-    getProject() {
+    async getProject() {
       return ctx.project;
     },
     getEventBus() {
@@ -159,12 +168,9 @@ function makeFakeFlow(): { flow: Flow; ctx: FakeFlowState } {
     getPaths() {
       return new Paths(ctx.project.path);
     },
-    async replaySession(_sessionId) {
-      const events = ctx.replayEvents;
-      async function* iter(): AsyncIterable<SessionEvent> {
-        for (const e of events) yield e;
-      }
-      return iter();
+    getArtifacts() {
+      const paths = new Paths(ctx.project.path);
+      return new ProjectArtifacts(paths, new StateStore(paths));
     },
     async listNotifications(): Promise<Notification[]> {
       return [];
@@ -422,36 +428,94 @@ test("invalid schema (unknown command type) returns error with requestId", async
   }
 });
 
-test("session.replay streams session.events from flow.replaySession", async () => {
-  const { flow, ctx } = makeFakeFlow();
-  const now = new Date().toISOString();
-  ctx.replayEvents = [
-    { sessionId: "S1", ts: now, kind: "system", payload: { a: 1 } },
-    { sessionId: "S1", ts: now, kind: "assistant_text", payload: { a: 2 } },
-    { sessionId: "S1", ts: now, kind: "stop", payload: { a: 3 } },
+test("artifact.fetch session.events streams chunks + end frame matching JSONL line count", async () => {
+  // Build a real Paths/StateStore/ProjectArtifacts on top of a tempdir with a
+  // hand-written JSONL so the wire round-trip exercises the same path the
+  // production server uses.
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "flow-ws-art-"));
+  const root = await fs.realpath(tmp);
+  const paths = new Paths(root);
+  await scaffoldFlowDir(paths, resolveBundledAssetsDir());
+
+  const taskId = "T-art";
+  const sessionId = "S-art";
+  const jsonlPath = paths.taskSessionJsonl(taskId, sessionId);
+  const lines = [
+    { type: "system", subtype: "init", timestamp: "2026-04-30T10:00:00Z" },
+    { type: "assistant", message: { content: [{ type: "text", text: "hi" }] } },
+    { type: "tool_use", id: "t1", name: "Read", input: {} },
+    { type: "stop" },
   ];
+  for (const line of lines) await appendJsonl(jsonlPath, line);
+
+  // Pre-seed state so ProjectArtifacts can resolve taskId from sessionId.
+  const stateBlob = {
+    version: 1,
+    tasks: [],
+    sessions: [
+      {
+        id: sessionId,
+        taskId,
+        stage: "spec",
+        provider: "claude-code",
+        model: "x",
+        skillName: "spec",
+        prompt: "<>",
+        status: "succeeded",
+        startedAt: "2026-04-30T10:00:00Z",
+        endedAt: "2026-04-30T10:05:00Z",
+        tokens: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, total: 0 },
+        autocompacted: false,
+        costUsd: 0,
+        exitCode: 0,
+      },
+    ],
+    updatedAt: "2026-04-30T10:05:00Z",
+  };
+  await fs.writeFile(paths.stateJson, JSON.stringify(stateBlob), "utf8");
+
+  const state = new StateStore(paths);
+  await state.load();
+  const realArtifacts = new ProjectArtifacts(paths, state);
+
+  const { flow } = makeFakeFlow();
+  flow.getArtifacts = () => realArtifacts;
 
   const server = await startWsServer({ flow, port: 0, version: "0.1.0" });
   try {
     const c = await connect(server.port);
     try {
       await c.waitFor((m) => m.type === "config");
-      c.send({ type: "session.replay", sessionId: "S1" });
-      await c.waitFor(
-        () =>
-          c.messages.filter(
-            (m) =>
-              m.type === "session.event" &&
-              (m as { event: SessionEvent }).event.kind === "stop",
-          ).length > 0,
-      );
-      const events = c.messages.filter((m) => m.type === "session.event");
-      assert.equal(events.length, 3);
+      c.send({
+        type: "artifact.fetch",
+        fetchId: "f1",
+        kind: "session.events",
+        ids: { sessionId },
+      });
+      await c.waitFor((m) => m.type === "artifact.end");
+      const chunks = c.messages.filter((m) => m.type === "artifact.chunk");
+      const ends = c.messages.filter((m) => m.type === "artifact.end");
+      assert.equal(chunks.length, lines.length);
+      assert.equal(ends.length, 1);
+      for (const m of chunks) {
+        const ch = m as {
+          type: "artifact.chunk";
+          fetchId: string;
+          kind: string;
+          ids: Record<string, string | number>;
+          payload: { sessionId: string };
+        };
+        assert.equal(ch.fetchId, "f1");
+        assert.equal(ch.kind, "session.events");
+        assert.equal(ch.ids["sessionId"], sessionId);
+        assert.equal(ch.payload.sessionId, sessionId);
+      }
     } finally {
       await c.close();
     }
   } finally {
     await server.close();
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
 

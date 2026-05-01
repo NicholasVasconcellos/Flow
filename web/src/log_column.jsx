@@ -1,6 +1,7 @@
 import React from 'react';
 import { I } from './icons.jsx';
 import { Panel, StatusBadge, ContextDonut, formatK, formatCost } from './primitives.jsx';
+import { useArtifact } from './useArtifact.js';
 
 // Log column — renders formatted session log events
 
@@ -31,8 +32,16 @@ const LogColumn = ({ session, events, onClose, onExpand, collapsed, fixedWidth }
     return () => document.removeEventListener("mousedown", onDoc);
   }, [filterOpen]);
 
+  // Lazily replay this session's full event JSONL on first render. Idempotent
+  // across mounts/StrictMode via the module-scope inflight map in useArtifact.
+  // The hook is called unconditionally (rules-of-hooks); it no-ops when
+  // session?.id is missing.
+  useArtifact('session.events', { sessionId: session?.id });
+
   if (!session) return null;
-  const allSessionEvents = events.filter(e => e.sessionId === session.id);
+  const allSessionEvents = events
+    .filter(e => e.sessionId === session.id)
+    .sort((a, b) => (a.ts ?? '').localeCompare(b.ts ?? ''));
   const sessionEvents = allSessionEvents.filter(e => enabled[e.kind] !== false);
   const activeCount = LOG_FILTER_TYPES.filter(t => enabled[t.kind]).length;
   const filtersActive = activeCount < LOG_FILTER_TYPES.length;

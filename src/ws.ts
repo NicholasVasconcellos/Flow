@@ -107,12 +107,14 @@ export async function startWsServer(opts: WsServerOpts): Promise<WsServer> {
     sendToThis({ type: "hello", version });
 
     // 2) project.state if a project is open
-    try {
-      const project = flow.getProject();
-      if (project) sendToThis({ type: "project.state", project });
-    } catch {
-      /* flow not bound to a project — skip */
-    }
+    void (async () => {
+      try {
+        const project = await flow.getProject();
+        if (project) sendToThis({ type: "project.state", project });
+      } catch {
+        /* flow not bound to a project — skip */
+      }
+    })();
 
     // 3) config
     try {
@@ -225,7 +227,7 @@ async function handleCommand(
         return;
       }
       case "project.open": {
-        const current = flow.getProject();
+        const current = await flow.getProject();
         if (current.path !== cmd.path) {
           replyError(
             "project.open not supported — server bound to single project",
@@ -290,11 +292,34 @@ async function handleCommand(
         return;
       }
 
-      // --- session.replay — stream JSONL lines back --------------------
-      case "session.replay": {
-        const it = await flow.replaySession(cmd.sessionId);
-        for await (const event of it) {
-          reply({ type: "session.event", event });
+      // --- artifact.fetch — stream any on-disk artifact via ProjectArtifacts
+      case "artifact.fetch": {
+        const { fetchId, kind, ids } = cmd;
+        try {
+          const it = flow.getArtifacts().fetch(
+            kind as Parameters<
+              ReturnType<Flow["getArtifacts"]>["fetch"]
+            >[0],
+            ids,
+          );
+          for await (const chunk of it) {
+            reply({
+              type: "artifact.chunk",
+              fetchId,
+              kind: chunk.kind,
+              ids: chunk.ids,
+              payload: chunk.payload,
+            });
+          }
+          reply({ type: "artifact.end", fetchId, kind, ids });
+        } catch (err) {
+          reply({
+            type: "artifact.error",
+            fetchId,
+            kind,
+            ids,
+            message: (err as Error).message,
+          });
         }
         return;
       }

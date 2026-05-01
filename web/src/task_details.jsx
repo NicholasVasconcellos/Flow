@@ -2,6 +2,7 @@ import React from 'react';
 import { I } from './icons.jsx';
 import { StagePill, StatusBadge, ContextDonut, formatK, formatCost } from './primitives.jsx';
 import { useFlowData } from './FlowDataContext.jsx';
+import { useArtifact } from './useArtifact.js';
 
 // Task Details Panel — shown when a node is selected
 const TaskDetailsPanel = ({ taskId, openLog, openLogIds = [] }) => {
@@ -165,6 +166,32 @@ const TaskDetailsPanel = ({ taskId, openLog, openLogIds = [] }) => {
         </>
       )}
 
+      {/* Cold-load / lazy artifacts (steps 4–6) */}
+      {detail.progress && (
+        <>
+          <SectionH>Progress</SectionH>
+          <PreBlock text={detail.progress}/>
+        </>
+      )}
+      {detail.summary && (
+        <>
+          <SectionH>Summary</SectionH>
+          <PreBlock text={detail.summary}/>
+        </>
+      )}
+      {detail.learningsDraft && (
+        <>
+          <SectionH>Learnings draft</SectionH>
+          <PreBlock text={detail.learningsDraft}/>
+        </>
+      )}
+      {Array.isArray(detail.roundIssues) && detail.roundIssues.length > 0 && (
+        <RoundIssuesSection taskId={taskId} rounds={detail.roundIssues}/>
+      )}
+      {detail.verifyLogPresent && (
+        <VerifyLogSection taskId={taskId}/>
+      )}
+
       {/* Sessions */}
       {!SESSIONS_HYDRATED && taskSessions.length === 0 && (
         <>
@@ -301,6 +328,95 @@ const RichText = ({ text }) => {
   }
   if (last < text.length) parts.push(<span key={key++}>{text.slice(last)}</span>);
   return <>{parts}</>;
+};
+
+// ---------------------------------------------------------------------------
+// Cold-load / lazy artifact subviews
+// ---------------------------------------------------------------------------
+
+const PreBlock = ({ text }) => (
+  <pre style={{
+    margin: "0 0 12px 0",
+    padding: "10px 12px",
+    background: "var(--bg-2)",
+    border: "1px solid var(--border-1)",
+    borderRadius: "var(--r-sm)",
+    color: "var(--text-2)",
+    fontSize: 11.5,
+    lineHeight: 1.5,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+    overflowX: "auto",
+  }}>{text}</pre>
+);
+
+const RoundIssuesSection = ({ taskId, rounds }) => {
+  const [openRound, setOpenRound] = React.useState(null);
+  return (
+    <>
+      <SectionH>UI review issues</SectionH>
+      <div style={{ marginBottom: 12 }}>
+        {rounds.map((r) => (
+          <div key={r.round} style={{ marginBottom: 4 }}>
+            <button
+              className="btn sm"
+              onClick={() => setOpenRound(openRound === r.round ? null : r.round)}
+              style={{ width: "100%", textAlign: "left" }}
+              title={r.filename}
+            >
+              Round {r.round} — {r.filename}
+            </button>
+            {openRound === r.round && (
+              <RoundIssuesBody taskId={taskId} round={r.round}/>
+            )}
+          </div>
+        ))}
+      </div>
+    </>
+  );
+};
+
+const RoundIssuesBody = ({ taskId, round }) => {
+  const { TASK_DETAILS } = useFlowData();
+  const entry = useArtifact('task.round-issues', { taskId, round });
+  const body = TASK_DETAILS[taskId]?.roundIssuesBodies?.[round];
+  if (entry?.status === 'error') {
+    return <div style={{ padding: 8, color: "var(--err)", fontSize: 11 }}>Error: {entry.error}</div>;
+  }
+  if (body === undefined) {
+    return <div style={{ padding: 8, color: "var(--text-4)", fontSize: 11 }}>Loading…</div>;
+  }
+  return <PreBlock text={body || '(empty)'}/>;
+};
+
+const VerifyLogSection = ({ taskId }) => {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <>
+      <SectionH>Verify log</SectionH>
+      <button
+        className="btn sm"
+        onClick={() => setOpen(!open)}
+        style={{ marginBottom: 6 }}
+      >
+        {open ? "Hide verify log" : "View verify log"}
+      </button>
+      {open && <VerifyLogBody taskId={taskId}/>}
+    </>
+  );
+};
+
+const VerifyLogBody = ({ taskId }) => {
+  const { TASK_DETAILS } = useFlowData();
+  const entry = useArtifact('task.verify-log', { taskId });
+  const body = TASK_DETAILS[taskId]?.verifyLog;
+  if (entry?.status === 'error') {
+    return <div style={{ padding: 8, color: "var(--err)", fontSize: 11 }}>Error: {entry.error}</div>;
+  }
+  if (body === undefined) {
+    return <div style={{ padding: 8, color: "var(--text-4)", fontSize: 11 }}>Loading…</div>;
+  }
+  return <PreBlock text={body || '(empty)'}/>;
 };
 
 export { TaskDetailsPanel };
