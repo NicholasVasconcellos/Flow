@@ -205,6 +205,10 @@ interface FakeGitOptions {
   markerScanReturns?: string[];
   /** Static result for hasUncommittedChanges. Defaults to false (clean). */
   hasUncommittedChanges?: boolean;
+  /** Override for the rev-list rescue probe used by the scheduler when
+   *  headBefore===headAfter. When set, replaces the default approximation
+   *  (1 if the worktree has any HEAD recorded, 0 otherwise). */
+  commitsAheadFn?: (taskId: string) => number;
 }
 
 interface FakeGitHandle {
@@ -285,6 +289,15 @@ function makeFakeGit(
 
     async getWorktreeHeadSha(taskId: string) {
       return heads.get(taskId) ?? null;
+    },
+
+    async commitsAheadOfBase(taskId: string) {
+      // Approximation: in this fake we don't track main-vs-branch divergence
+      // explicitly; treat any bumped HEAD as "1 commit ahead" so the
+      // scheduler's rev-list rescue can be exercised. Tests that need the
+      // race-rescue path stub commitsAheadFn directly via opts.commitsAheadFn.
+      if (opts.commitsAheadFn) return opts.commitsAheadFn(taskId);
+      return heads.has(taskId) ? 1 : 0;
     },
 
     async commitAllInWorktree(taskId: string, message: CommitMessage) {
@@ -1026,6 +1039,30 @@ test(
     // retry succeeded without consuming retries.
     assert.equal(t.retries, 0);
     assert.equal(specCalls, 2);
+  },
+);
+
+test(
+  "commit detection: rev-list rescue advances stage when headBefore===headAfter but commits exist",
+  { timeout: 10000 },
+  async () => {
+    const h = await makeHarness({
+      taskDefs: [mkTaskDef("A")],
+      config: { retryCount: 0 },
+      // Race fixture: the agent committed but the ref-update hadn't
+      // landed when the scheduler read HEAD. Suppress the default
+      // bumpHead so headBefore === headAfter.
+      gitOpts: {
+        commitsAheadFn: (taskId) => (taskId === "A" ? 1 : 0),
+      },
+    });
+    h.agent.setHeadBumpFn(null);
+
+    const t = await h.scheduler.runTask("A");
+    // Without the rev-list rescue, every stage would loop on
+    // bumpRetryOrPause("no_commit") and the task would pause. With the
+    // rescue, the pipeline drains to merged.
+    assert.equal(t.status, "merged");
   },
 );
 

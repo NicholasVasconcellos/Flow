@@ -220,6 +220,29 @@ export class GitManager {
     }
   }
 
+  /** Number of commits the task's worktree branch is ahead of `mainBranch`.
+   *  Used by the scheduler as a robust fallback to the headBefore/headAfter
+   *  comparison: a `git rev-list base..HEAD` count is computed from git's
+   *  own commit graph, so it survives the race where the post-spawn HEAD
+   *  read happens before a freshly-written commit's ref update lands.
+   *  Returns 0 on any error (worktree missing, branch missing, etc.) so
+   *  callers can default to "no commits". */
+  async commitsAheadOfBase(taskId: string): Promise<number> {
+    const dir = this.paths.worktreeDir(taskId);
+    if (!(await pathExists(dir))) return 0;
+    try {
+      const out = await simpleGit(dir).raw([
+        "rev-list",
+        `${this.mainBranch}..HEAD`,
+        "--count",
+      ]);
+      const n = Number.parseInt(out.trim(), 10);
+      return Number.isFinite(n) && n >= 0 ? n : 0;
+    } catch {
+      return 0;
+    }
+  }
+
   async removeWorktree(
     taskId: string,
     opts?: { branch?: string; branchMerged?: boolean },

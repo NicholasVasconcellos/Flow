@@ -159,6 +159,12 @@ const NO_RETRY_KINDS = new Set<ErrorKind>([
   "zero_token_kill",
 ]);
 
+/** Settle window before falling back from headBefore/headAfter to a
+ *  rev-list count. Long enough to absorb a slow ref-update on a busy
+ *  filesystem; short enough that the no-commit retry decision isn't
+ *  meaningfully delayed when the agent really did do nothing. */
+const COMMIT_SETTLE_MS = 250;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -676,7 +682,18 @@ export class Scheduler {
     await this.persistReviewRequested(session, taskId, stage);
 
     const postHead = await this.git.getWorktreeHeadSha(taskId);
-    const headMoved = preHead !== postHead && postHead !== null;
+    let headMoved = preHead !== postHead && postHead !== null;
+    // Robustness fallback for the headBefore/headAfter race: if the SHA
+    // comparison says HEAD didn't move but git's own commit graph reports
+    // commits ahead of `mainBranch`, the agent did commit — the ref-update
+    // simply hadn't landed when we read HEAD. A short settle window plus
+    // a rev-list rescue catches this without spuriously bouncing the task
+    // back through `bumpRetryOrPause("no_commit")`.
+    if (!headMoved && session.status !== "failed") {
+      await new Promise((resolve) => setTimeout(resolve, COMMIT_SETTLE_MS));
+      const ahead = await this.git.commitsAheadOfBase(taskId);
+      if (ahead > 0) headMoved = true;
+    }
 
     const signal = await readStageSignal(this.paths, taskId);
 
