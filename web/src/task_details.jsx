@@ -18,13 +18,12 @@ const TaskDetailsPanel = ({ taskId, openLog, openLogIds = [] }) => {
     );
   }
   const stageMeta = window.FLOW_DATA.STAGES[task.stage] || { label: task.stage };
-  const detail = TASK_DETAILS[taskId] || {
+  const stored = TASK_DETAILS[taskId] ?? {};
+  const summaryText = (typeof task.description === "string" && task.description.trim())
+    ? task.description
+    : `This task is part of the **${stageMeta.label}** stage. Full spec not loaded — click into its session to see logs.`;
+  const detail = {
     id: task.id, title: task.title, stage: task.stage, status: task.status,
-    description: {
-      summary: `This task is part of the **${stageMeta.label}** stage. Full spec not loaded — click into its session to see logs.`,
-      acceptance: ["Placeholder acceptance criteria."],
-      notes: "No additional notes.",
-    },
     artifacts: [],
     depsMet: task.requires || task.deps || [],
     blocks: [],
@@ -35,6 +34,12 @@ const TaskDetailsPanel = ({ taskId, openLog, openLogIds = [] }) => {
     startedAt: "—", updatedAt: "—",
     retries: task.retries, transientRetries: task.transientRetries, uiReviewRound: task.uiReviewRound,
     flags: { hasUI: task.hasUI, hasSpec: task.hasSpec, hasCodeReview: task.hasCodeReview },
+    ...stored,
+    description: stored.description ?? {
+      summary: summaryText,
+      acceptance: ["Placeholder acceptance criteria."],
+      notes: "No additional notes.",
+    },
   };
   const taskSessions = SESSIONS.filter(s => s.taskId === taskId);
   // Bring in runtime fields from the task even if TASK_DETAILS exists
