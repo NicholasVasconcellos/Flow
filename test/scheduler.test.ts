@@ -1030,6 +1030,131 @@ test(
 );
 
 test(
+  "no-retry kinds (api_stream_idle) bypass transient retry and pause for review",
+  { timeout: 10000 },
+  async () => {
+    let specCalls = 0;
+    const h = await makeHarness({
+      taskDefs: [mkTaskDef("A")],
+      config: { retryCount: 0 },
+      agentScript: (call) => {
+        if (call.stage === "spec") {
+          specCalls += 1;
+          return {
+            status: "failed",
+            error: "API Error: Stream idle timeout",
+            exitCode: 1,
+            transientError: false,
+            errorKind: "api_stream_idle",
+          };
+        }
+        return {};
+      },
+    });
+
+    const t = await h.scheduler.runTask("A");
+    assert.equal(t.status, "paused");
+    assert.equal(t.lastError?.kind, "api_stream_idle");
+    assert.equal(t.transientRetries, 0);
+    // Single attempt — no retry was issued on the no-retry kind.
+    assert.equal(specCalls, 1);
+  },
+);
+
+test(
+  "escalation (pause_for_review): consecutive transient retries pause the task with warn-class notification",
+  { timeout: 10000 },
+  async () => {
+    let specCalls = 0;
+    const h = await makeHarness({
+      taskDefs: [mkTaskDef("A")],
+      config: {
+        retryCount: 0,
+        escalation: {
+          afterTransientRetries: 2,
+          policy: "pause_for_review",
+          model: "opus[1m]",
+        },
+      },
+      agentScript: (call) => {
+        if (call.stage === "spec") {
+          specCalls += 1;
+          return {
+            status: "failed",
+            error: "Stream error: idle timeout",
+            exitCode: 1,
+            transientError: true,
+            errorKind: "agent_error",
+          };
+        }
+        return {};
+      },
+    });
+
+    const t = await h.scheduler.runTask("A");
+    assert.equal(t.status, "paused");
+    // 2 transient retries consumed before escalation fires on the 3rd attempt.
+    assert.equal(specCalls, 3);
+  },
+);
+
+test(
+  "escalation (escalate_model): after threshold, next spawn carries the override model and clears on success",
+  { timeout: 10000 },
+  async () => {
+    const calls: Array<{ stage: string; model?: string }> = [];
+    let specCalls = 0;
+    const h = await makeHarness({
+      taskDefs: [mkTaskDef("A")],
+      config: {
+        retryCount: 0,
+        escalation: {
+          afterTransientRetries: 1,
+          policy: "escalate_model",
+          model: "opus[1m]",
+        },
+      },
+      agentScript: (call, _ctx) => {
+        if (call.stage === "spec") {
+          specCalls += 1;
+          if (specCalls <= 2) {
+            return {
+              status: "failed",
+              error: "Stream error: idle timeout",
+              exitCode: 1,
+              transientError: true,
+              errorKind: "agent_error",
+            };
+          }
+        }
+        return {};
+      },
+    });
+    // Capture the model arg per call by wrapping spawnAgent. The Scheduler
+    // holds a reference to the runner object so the live wrap is observed.
+    const real = h.agent.runner.spawnAgent.bind(h.agent.runner);
+    (h.agent.runner as { spawnAgent: typeof real }).spawnAgent = async (
+      args,
+    ) => {
+      calls.push({ stage: String(args.stage), model: args.model });
+      return real(args);
+    };
+
+    const t = await h.scheduler.runTask("A");
+    assert.equal(t.status, "merged");
+    // 3 spec spawns: attempt 1 (transient fail), attempt 2 (transient
+    // fail, gates escalation), attempt 3 (escalated model — succeeds).
+    const specSpawns = calls.filter((c) => c.stage === "spec");
+    assert.equal(specSpawns.length, 3);
+    assert.equal(specSpawns[0]?.model, undefined);
+    assert.equal(specSpawns[1]?.model, undefined);
+    assert.equal(specSpawns[2]?.model, "opus[1m]");
+    // After the successful stage, escalatedModel is cleared.
+    assert.equal(t.escalatedModel, undefined);
+  },
+);
+
+test(
   "transientRetries resets to 0 after a successful stage advance",
   { timeout: 10000 },
   async () => {

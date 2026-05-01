@@ -1054,6 +1054,16 @@ export class AgentRunner {
     let sawRateLimitEvent = false;
     let loopedToolKey: string | null = null;
     let loopedToolCount = 0;
+    // Tracks whether the agent ever produced an assistant_text payload. Read
+    // by the zero-token-kill detector at exit time: a SIGTERM with no tokens
+    // *and* no first-text means the child died before generating anything,
+    // which is a non-retryable transport failure rather than agent logic.
+    let firstAssistantTextSeen = false;
+    // Set when an assistant_text payload contains the synthetic
+    // "API Error: Stream idle timeout" marker. Distinct from the wall-clock
+    // stall watchdog because the API surface emits this *into the stream*
+    // rather than going silent — the agent didn't hang, the transport did.
+    let streamIdleHit = false;
     // E2 watchdog state — see the rewrite at the tool_use loop below for the
     // full rule. We only need to track the most recent tool key, the current
     // consecutive-streak count for that key, and whether the previous run of
@@ -1271,6 +1281,22 @@ export class AgentRunner {
 
         if (kind === "assistant_text") {
           const text = extractAssistantText(payload);
+          if (text.trim().length > 0) firstAssistantTextSeen = true;
+          // Synthetic transport error injected by the API surface as an
+          // assistant message. Treated as non-retryable: the model didn't
+          // stall, the upstream stream did, and re-running the same prompt
+          // is just as likely to hit the same condition. Killing here
+          // routes through the exit handler with errorKind="api_stream_idle".
+          if (!streamIdleHit && text.includes("API Error: Stream idle timeout")) {
+            streamIdleHit = true;
+            killed = true;
+            try {
+              proc.kill("SIGTERM");
+            } catch {
+              /* ignore */
+            }
+            break;
+          }
           const blocked = /^FLOW_BLOCKED:\s*(.+)$/m.exec(text);
           if (blocked && !blockedReason) {
             blockedReason = blocked[1]!.trim();
@@ -1351,6 +1377,22 @@ export class AgentRunner {
     if (blockedReason) {
       session.status = "failed";
       session.error = `FLOW_BLOCKED: ${blockedReason}`;
+    } else if (streamIdleHit) {
+      session.status = "failed";
+      session.error =
+        "API Error: Stream idle timeout (synthetic transport error in assistant payload)";
+      session.transientError = false;
+      session.errorKind = "api_stream_idle";
+    } else if (
+      exitCode === 143 &&
+      totalTokens(tokens) === 0 &&
+      !firstAssistantTextSeen
+    ) {
+      session.status = "failed";
+      session.error =
+        "Session killed (SIGTERM, exit 143) before any assistant output: zero-token transport failure.";
+      session.transientError = false;
+      session.errorKind = "zero_token_kill";
     } else if (loopedToolKey !== null) {
       // E2: non-retryable. Scheduler treats `looped_on_blocked_tool:` as
       // markPaused-immediately (see isLoopedOnBlockedTool).

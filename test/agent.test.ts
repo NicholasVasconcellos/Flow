@@ -443,6 +443,64 @@ test("autocompact: compact_boundary line + exit 0 yields status=autocompacted", 
 // Nonzero exit
 // ---------------------------------------------------------------------------
 
+test("synthetic stream-idle in assistant text → errorKind=api_stream_idle, transientError=false", async () => {
+  const root = await mkTmp();
+  const spawnerHandle = makeFakeSpawner();
+  const { runner } = makeRunner(root, spawnerHandle);
+  const paths = new Paths(root);
+  await writeSkill(paths, "exec", "skill");
+
+  spawnerHandle.queue.push({
+    stdout: [
+      JSON.stringify({ type: "system", subtype: "init" }),
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{ type: "text", text: "API Error: Stream idle timeout" }],
+        },
+      }),
+    ],
+    exitCode: 143,
+  });
+
+  const session = await runner.spawnAgent({
+    taskId: "TSI",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  assert.equal(session.status, "failed");
+  assert.equal(session.errorKind, "api_stream_idle");
+  assert.equal(session.transientError, false);
+});
+
+test("zero-token SIGTERM with no assistant text → errorKind=zero_token_kill, no retry", async () => {
+  const root = await mkTmp();
+  const spawnerHandle = makeFakeSpawner();
+  const { runner } = makeRunner(root, spawnerHandle);
+  const paths = new Paths(root);
+  await writeSkill(paths, "exec", "skill");
+
+  // No assistant text at all; only an init line, then exit 143 with no usage.
+  spawnerHandle.queue.push({
+    stdout: [JSON.stringify({ type: "system", subtype: "init" })],
+    exitCode: 143,
+  });
+
+  const session = await runner.spawnAgent({
+    taskId: "TZT",
+    stage: "exec",
+    skillName: "exec",
+    worktreePath: root,
+  });
+
+  assert.equal(session.status, "failed");
+  assert.equal(session.errorKind, "zero_token_kill");
+  assert.equal(session.transientError, false);
+  assert.equal(session.tokens.total, 0);
+});
+
 test("nonzero exit code yields status=failed with error string", async () => {
   const root = await mkTmp();
   const spawnerHandle = makeFakeSpawner();

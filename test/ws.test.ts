@@ -45,6 +45,11 @@ function makeConfig(): Config {
     ws: { port: 7777 },
     pricing: {},
     infraKinds: ["api_stream_idle", "zero_token_kill", "stall"],
+    escalation: {
+      afterTransientRetries: 2,
+      policy: "pause_for_review",
+      model: "opus[1m]",
+    },
   };
 }
 

@@ -130,6 +130,12 @@ export const TaskRuntimeSchema = TaskDefSchema.extend({
   uiReviewRound: z.number().int().nonnegative().default(0),
   worktreePath: z.string().optional(),
   branchName: z.string().optional(),
+  /** When set, the next agent spawn for this task should use this model
+   *  instead of the stage-default. Populated by the scheduler when
+   *  `Config.escalation.policy === "escalate_model"` triggers; cleared on
+   *  the next successful stage finalize. One-shot — the field is consumed
+   *  and reset, never persisted across stages. */
+  escalatedModel: z.string().optional(),
   currentSessionId: z.string().optional(),
   sessionIds: z.array(z.string()).default([]),
   createdAt: z.string(),
@@ -348,6 +354,22 @@ export const ConfigSchema = z.object({
   infraKinds: z
     .array(ErrorKindSchema)
     .default(["api_stream_idle", "zero_token_kill", "stall"]),
+  /** Escalation policy applied after `afterTransientRetries` consecutive
+   *  transient retries on the same stage. `pause_for_review` is the
+   *  default — surface a warn-level notification, mark the task paused,
+   *  stop cycling so a human can investigate. `escalate_model` plumbs the
+   *  configured `model` into the next single retry instead, useful when
+   *  upgrading to a higher-capability model is more likely to break a
+   *  loop than another retry on the same model. */
+  escalation: z
+    .object({
+      afterTransientRetries: z.number().int().positive().default(2),
+      policy: z
+        .enum(["pause_for_review", "escalate_model"])
+        .default("pause_for_review"),
+      model: z.string().default("opus[1m]"),
+    })
+    .default({}),
 });
 export type Config = z.infer<typeof ConfigSchema>;
 

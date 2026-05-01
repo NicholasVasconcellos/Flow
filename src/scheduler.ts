@@ -151,6 +151,14 @@ interface TaskHandle {
  *  stage before they start consuming the agent-logic retry budget. */
 const TRANSIENT_RETRY_CAP = 3;
 
+/** Failure kinds where retrying the same stage is wasted work — the upstream
+ *  transport, not the agent, is broken. The scheduler bypasses the transient
+ *  retry path and pauses these tasks for human review immediately. */
+const NO_RETRY_KINDS = new Set<ErrorKind>([
+  "api_stream_idle",
+  "zero_token_kill",
+]);
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -623,6 +631,10 @@ export class Scheduler {
     }
 
     let session: Session;
+    // One-shot model override applied by the escalation gate after the
+    // configured number of transient retries. Consumed here and reset
+    // below so the upgrade only applies to a single attempt.
+    const escalatedModel = task.escalatedModel;
     try {
       session = await this.agent.spawnAgent({
         taskId,
@@ -631,6 +643,7 @@ export class Scheduler {
         worktreePath,
         task: taskDefView(task),
         contextFiles: stageContextFiles,
+        ...(escalatedModel ? { model: escalatedModel } : {}),
         ...(stage === "exec_ui_check"
           ? { uiReviewRound: task.uiReviewRound }
           : {}),
@@ -736,11 +749,49 @@ export class Scheduler {
     if (session.status === "failed") {
       const err = session.error ?? `Stage ${stage} failed`;
       const sessionKind = session.errorKind;
+
+      // No-retry kinds short-circuit the transient path entirely. Retrying
+      // a transport-level zero-progress failure (api_stream_idle,
+      // zero_token_kill) just burns another window without changing the
+      // outcome — surface it for human review immediately.
+      if (sessionKind && NO_RETRY_KINDS.has(sessionKind)) {
+        return await this.pauseForReview(
+          taskId,
+          stage,
+          session.id,
+          err,
+          sessionKind,
+        );
+      }
+
       if (
         session.transientError &&
         (task.transientRetries ?? 0) < TRANSIENT_RETRY_CAP
       ) {
-        task.transientRetries = (task.transientRetries ?? 0) + 1;
+        const escalation = this.config.escalation;
+        const priorRetries = task.transientRetries ?? 0;
+
+        // Escalation gate fires once we've already absorbed
+        // `afterTransientRetries` transient retries on this stage — the
+        // next attempt is the escalated one. Either pause for human
+        // review (token-cheap default) or upgrade the next single
+        // attempt's model.
+        if (priorRetries >= escalation.afterTransientRetries) {
+          if (escalation.policy === "pause_for_review") {
+            return await this.pauseForReview(
+              taskId,
+              stage,
+              session.id,
+              `${err}\n\n(escalated after ${priorRetries} transient retries)`,
+              sessionKind,
+            );
+          }
+          // escalate_model: record the override on the task so the next
+          // spawnAgent picks it up. One-shot — cleared on stage success.
+          task.escalatedModel = escalation.model;
+        }
+
+        task.transientRetries = priorRetries + 1;
         task.lastError = { kind: sessionKind, stage, message: err, at: nowIso() };
         task.updatedAt = nowIso();
         this.state.upsertTask(task);
@@ -841,6 +892,7 @@ export class Scheduler {
     const task = this.requireTask(taskId);
     task.lastError = undefined;
     task.transientRetries = 0;
+    task.escalatedModel = undefined;
     task.updatedAt = nowIso();
     this.state.upsertTask(task);
     await this.saveState();
@@ -918,6 +970,36 @@ export class Scheduler {
       sessionId,
       severity: "error",
       title: `Task ${taskId} paused at ${stage}`,
+      body: err,
+    });
+    return { kind: "paused" };
+  }
+
+  /** Pause a task for human review without consuming the retry budget.
+   *  Used by the no-retry kinds (transport-level zero-progress failures)
+   *  and by the escalation gate's `pause_for_review` policy. Distinct from
+   *  `markPaused` only in the notification severity (`warn` vs `error`)
+   *  and the title — surfaced this way so the UI can route review-class
+   *  pauses through the same lane as `FLOW_REVIEW_REQUESTED`. */
+  private async pauseForReview(
+    taskId: string,
+    stage: AgentStage,
+    sessionId: string,
+    err: string,
+    errorKind?: ErrorKind,
+  ): Promise<{ kind: "paused" }> {
+    const task = this.requireTask(taskId);
+    task.status = "paused";
+    task.lastError = { kind: errorKind, stage, message: err, at: nowIso() };
+    task.updatedAt = nowIso();
+    this.state.upsertTask(task);
+    await this.saveState();
+    this.eventBus.emit("task.upsert", { task: { ...task } });
+    await this.emitNotification({
+      taskId,
+      sessionId,
+      severity: "warn",
+      title: `Task ${taskId} review requested at ${stage}`,
       body: err,
     });
     return { kind: "paused" };
