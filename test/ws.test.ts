@@ -178,6 +178,12 @@ function makeFakeFlow(): { flow: Flow; ctx: FakeFlowState } {
     async ackNotification(id) {
       ctx.ackCalls.push(id);
     },
+    isReadOnly() {
+      return false;
+    },
+    async refreshFromDisk() {
+      /* no-op */
+    },
   };
 
   return { flow, ctx };
@@ -656,6 +662,33 @@ test("project.list returns empty projects list (v1 stub)", async () => {
       assert.deepEqual(
         (lst as { type: "project.list"; projects: unknown[] }).projects,
         [],
+      );
+    } finally {
+      await c.close();
+    }
+  } finally {
+    await server.close();
+  }
+});
+
+test("readOnly mode rejects mutating commands with a typed error", async () => {
+  const { flow } = makeFakeFlow();
+  // Override isReadOnly without recreating the whole fake.
+  (flow as { isReadOnly: () => boolean }).isReadOnly = () => true;
+  const server = await startWsServer({ flow, port: 0, version: "0.1.0" });
+  try {
+    const c = await connect(server.port);
+    try {
+      await c.waitFor((m) => m.type === "config");
+      c.send({ type: "task.retry", taskId: "T1", requestId: "r1" });
+      const msg = await c.waitFor(
+        (m) =>
+          m.type === "error" &&
+          (m as { requestId?: string }).requestId === "r1",
+      );
+      assert.match(
+        (msg as { message: string }).message,
+        /read-only/i,
       );
     } finally {
       await c.close();

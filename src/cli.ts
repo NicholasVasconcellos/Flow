@@ -888,8 +888,11 @@ program
   .description("start WebSocket server for the UI")
   .option("--port <n>", "port", (v) => Number.parseInt(v, 10))
   .action(async (opts: { port?: number }) => {
-    const flow = await createFlow({ projectPath: process.cwd() });
-    const lock = await acquireCliLock(flow, "serve");
+    // serve is a read-only transport: it must not mutate task state. It
+    // does not take the orchestrator lock, so a sibling driver
+    // (`run-all`, `overnight`) can run concurrently and serve will reflect
+    // its changes via disk-mtime polling.
+    const flow = await createFlow({ projectPath: process.cwd(), readOnly: true });
     let server: WsServer | null = null;
     let fired = false;
     const handler = (): void => {
@@ -912,11 +915,6 @@ program
         } catch {
           /* ignore */
         }
-        try {
-          await lock.release();
-        } catch {
-          /* ignore */
-        }
         process.exit(130);
       })();
     };
@@ -934,7 +932,6 @@ program
       console.error(chalk.red(`serve failed: ${(err as Error).message}`));
       process.exitCode = 1;
       flow.stop();
-      await lock.release();
     }
   });
 

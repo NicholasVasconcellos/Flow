@@ -78,6 +78,15 @@ export interface Flow {
   getArtifacts(): ProjectArtifacts;
   listNotifications(): Promise<Notification[]>;
   ackNotification(id: string): Promise<void>;
+  /** True when the Flow was constructed in read-only mode (e.g. by `flow
+   *  serve`). Mutating WS commands should reject when this is set; the
+   *  driving orchestrator runs as a sibling process. */
+  isReadOnly(): boolean;
+  /** Re-read state.json from disk and emit `task.upsert` for any task whose
+   *  fields differ from the in-memory copy. Used by the read-only WS server
+   *  to surface mutations made by a sibling driver. No-op when the disk
+   *  mtime hasn't advanced. */
+  refreshFromDisk(): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -123,6 +132,7 @@ class FlowImpl implements Flow {
   private readonly projectPath: string;
   private readonly assetsDir: string;
   private readonly gitRemote: string | null;
+  private readonly readOnly: boolean;
   private watchDispose: (() => void) | null = null;
   private stopped = false;
 
@@ -137,6 +147,7 @@ class FlowImpl implements Flow {
     agent: AgentRunner;
     scheduler: Scheduler;
     gitRemote: string | null;
+    readOnly?: boolean;
   }) {
     this.projectPath = opts.projectPath;
     this.assetsDir = opts.assetsDir;
@@ -148,6 +159,7 @@ class FlowImpl implements Flow {
     this.agent = opts.agent;
     this.scheduler = opts.scheduler;
     this.gitRemote = opts.gitRemote;
+    this.readOnly = opts.readOnly ?? false;
     this.artifacts = new ProjectArtifacts(opts.paths, opts.state);
   }
 
@@ -191,29 +203,41 @@ class FlowImpl implements Flow {
 
   // --- execution ---------------------------------------------------------
 
+  private guardWritable(op: string): void {
+    if (this.readOnly) {
+      throw new Error(`${op} not permitted in read-only mode`);
+    }
+  }
+
   async runOnce(): Promise<TaskRuntime | null> {
+    this.guardWritable("runOnce");
     return this.scheduler.runOnce();
   }
 
   async runAllOnce(opts?: { limit?: number }): Promise<TaskRuntime[]> {
+    this.guardWritable("runAllOnce");
     return this.scheduler.runAllOnce(opts);
   }
 
   async runAll(opts?: { limit?: number }): Promise<void> {
+    this.guardWritable("runAll");
     await this.scheduler.runAll(opts);
   }
 
   async retryTask(taskId: string): Promise<void> {
+    this.guardWritable("retryTask");
     await this.scheduler.retryTask(taskId);
   }
 
   async resumePausedTasks(opts?: {
     status?: "paused" | "blocked" | "all";
   }): Promise<TaskRuntime[]> {
+    this.guardWritable("resumePausedTasks");
     return this.scheduler.resumePausedTasks(opts);
   }
 
   async cancelTask(taskId: string): Promise<void> {
+    this.guardWritable("cancelTask");
     await this.scheduler.cancelTask(taskId);
   }
 
@@ -326,6 +350,18 @@ class FlowImpl implements Flow {
 
   getArtifacts(): ProjectArtifacts {
     return this.artifacts;
+  }
+
+  isReadOnly(): boolean {
+    return this.readOnly;
+  }
+
+  async refreshFromDisk(): Promise<void> {
+    const result = await this.state.reloadFromDiskIfChanged();
+    if (!result || result.changed.length === 0) return;
+    for (const t of result.changed) {
+      this.eventBus.emit("task.upsert", { task: { ...t } });
+    }
   }
 
   async listNotifications(): Promise<Notification[]> {
@@ -661,6 +697,7 @@ export async function createFlow(
     agent,
     scheduler,
     gitRemote,
+    readOnly: opts.readOnly ?? false,
   });
 
   // Emit project.state once.

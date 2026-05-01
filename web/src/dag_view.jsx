@@ -417,7 +417,7 @@ const DAGView = ({ tasks, selectedId, onSelect, hoveredId, onHover, statusFilter
           </div>
           <div style={{ display: "inline-flex", gap: 10, fontSize: 11, color: "var(--text-3)" }}>
             <span style={{display:"inline-flex", alignItems:"center", gap:4}}><span className="dot ok"/>done</span>
-            <span style={{display:"inline-flex", alignItems:"center", gap:4}}><span className="dot" style={{background:"var(--accent)"}}/>running</span>
+            <span style={{display:"inline-flex", alignItems:"center", gap:4}}><span className="dot info"/>running</span>
             <span style={{display:"inline-flex", alignItems:"center", gap:4}}><span className="dot info"/>ready</span>
             <span style={{display:"inline-flex", alignItems:"center", gap:4}}><span className="dot err"/>blocked</span>
             <span style={{display:"inline-flex", alignItems:"center", gap:4}}><span className="dot idle"/>queued</span>

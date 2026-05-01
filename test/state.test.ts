@@ -218,3 +218,48 @@ test("upsertTask / removeTask basic semantics", async () => {
   store.removeTask("X");
   assert.equal(store.getTasks().length, 0);
 });
+
+test("reloadFromDiskIfChanged returns null when mtime unchanged", async () => {
+  const root = await mkTmp();
+  const paths = new Paths(root);
+  const store = new StateStore(paths);
+  await store.load();
+  await store.save();
+  const result = await store.reloadFromDiskIfChanged();
+  assert.equal(result, null);
+});
+
+test("reloadFromDiskIfChanged surfaces external task mutations", async () => {
+  const rootA = await mkTmp();
+  const pathsA = new Paths(rootA);
+  // Writer simulates a sibling driver: writes state.json once.
+  const writer = new StateStore(pathsA);
+  await writer.load();
+  writer.syncFromTaskDefs([defA()]);
+  await writer.save();
+
+  // Reader is the read-only serve replica. Initial load matches disk.
+  const reader = new StateStore(pathsA);
+  await reader.load();
+  assert.equal(reader.getTask("A")!.status, "pending");
+
+  // Writer flips status, saves. Bumping mtime past the load timestamp is
+  // critical: filesystems with second-resolution mtimes (some Linux fs)
+  // would alias rapid back-to-back writes into a single mtime tick.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const t = writer.getTask("A")!;
+  t.status = "running";
+  writer.upsertTask(t);
+  await writer.save();
+
+  const result = await reader.reloadFromDiskIfChanged();
+  assert.ok(result, "expected a diff after sibling write");
+  assert.equal(result.changed.length, 1);
+  assert.equal(result.changed[0]!.id, "A");
+  assert.equal(result.changed[0]!.status, "running");
+  assert.equal(reader.getTask("A")!.status, "running");
+
+  // Idempotent — second poll with no further writes returns null.
+  const second = await reader.reloadFromDiskIfChanged();
+  assert.equal(second, null);
+});

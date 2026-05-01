@@ -22,6 +22,7 @@ function emptyState(): State {
 
 export class StateStore {
   private state: State;
+  private lastLoadedMtimeMs: number | null = null;
 
   constructor(private readonly paths: Paths) {
     this.state = emptyState();
@@ -31,15 +32,59 @@ export class StateStore {
     const raw = await readJsonIfExists<unknown>(this.paths.stateJson);
     if (raw === null) {
       this.state = emptyState();
+      this.lastLoadedMtimeMs = null;
       return this.state;
     }
     this.state = StateSchema.parse(raw);
+    try {
+      const stat = await fs.stat(this.paths.stateJson);
+      this.lastLoadedMtimeMs = stat.mtimeMs;
+    } catch {
+      this.lastLoadedMtimeMs = null;
+    }
     return this.state;
   }
 
   async save(): Promise<void> {
     this.state.updatedAt = nowIso();
     await writeJsonAtomic(this.paths.stateJson, this.state);
+    try {
+      const stat = await fs.stat(this.paths.stateJson);
+      this.lastLoadedMtimeMs = stat.mtimeMs;
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /** Re-read state.json from disk if its mtime has advanced since the last
+   *  load/save. Used by `flow serve` (read-only transport) to surface
+   *  mutations made by a sibling driver (`run-all`, `overnight`). Returns
+   *  the diff of tasks whose runtime fields changed, or `null` if disk is
+   *  unchanged. Sessions are intentionally not diffed — UI relies on the
+   *  bus event stream for per-session updates while the orchestrator is
+   *  alive, and on cold-load via `project.state` after a reconnect. */
+  async reloadFromDiskIfChanged(): Promise<{ changed: TaskRuntime[] } | null> {
+    let stat;
+    try {
+      stat = await fs.stat(this.paths.stateJson);
+    } catch {
+      return null;
+    }
+    if (this.lastLoadedMtimeMs === stat.mtimeMs) return null;
+    const raw = await readJsonIfExists<unknown>(this.paths.stateJson);
+    if (raw === null) return null;
+    const fresh = StateSchema.parse(raw);
+    const prevById = new Map(this.state.tasks.map((t) => [t.id, t] as const));
+    const changed: TaskRuntime[] = [];
+    for (const t of fresh.tasks) {
+      const prev = prevById.get(t.id);
+      if (!prev || JSON.stringify(prev) !== JSON.stringify(t)) {
+        changed.push(t);
+      }
+    }
+    this.state = fresh;
+    this.lastLoadedMtimeMs = stat.mtimeMs;
+    return { changed };
   }
 
   getTasks(): TaskRuntime[] {

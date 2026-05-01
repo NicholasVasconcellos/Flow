@@ -91,8 +91,31 @@ export async function startWsServer(opts: WsServerOpts): Promise<WsServer> {
   // Connection handling
   // -------------------------------------------------------------------------
 
+  // Disk-mtime poll for read-only servers. When a sibling driver
+  // (`run-all`, `overnight`) mutates state.json, re-load and re-emit
+  // `task.upsert` so connected clients see the change without the in-memory
+  // copy going stale. Loop is started/stopped with the connected-client
+  // count to avoid burning a 2s timer on an idle server.
+  const READ_ONLY_POLL_MS = 2_000;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  const startPolling = (): void => {
+    if (pollTimer || !flow.isReadOnly()) return;
+    pollTimer = setInterval(() => {
+      void flow.refreshFromDisk().catch(() => {
+        /* swallow — best-effort */
+      });
+    }, READ_ONLY_POLL_MS);
+    pollTimer.unref?.();
+  };
+  const stopPolling = (): void => {
+    if (!pollTimer) return;
+    clearInterval(pollTimer);
+    pollTimer = null;
+  };
+
   wss.on("connection", (socket) => {
     clients.add(socket);
+    startPolling();
 
     const sendToThis = (msg: ServerEvent): void => {
       if (socket.readyState !== socket.OPEN) return;
@@ -146,10 +169,12 @@ export async function startWsServer(opts: WsServerOpts): Promise<WsServer> {
 
     socket.on("close", () => {
       clients.delete(socket);
+      if (clients.size === 0) stopPolling();
     });
 
     socket.on("error", () => {
       clients.delete(socket);
+      if (clients.size === 0) stopPolling();
     });
   });
 
@@ -175,6 +200,7 @@ export async function startWsServer(opts: WsServerOpts): Promise<WsServer> {
     typeof address === "object" && address !== null ? address.port : port;
 
   const close = async (): Promise<void> => {
+    stopPolling();
     // Stop accepting connections and unsubscribe.
     for (const off of offs) {
       try {
@@ -216,6 +242,25 @@ async function handleCommand(
     if (requestId !== undefined) payload.requestId = requestId;
     reply(payload);
   };
+
+  const MUTATING_COMMANDS = new Set([
+    "run.once",
+    "run.allOnce",
+    "run.all",
+    "run.cancel",
+    "task.retry",
+    "task.resume",
+    "task.cancel",
+    "notification.ack",
+    "config.update",
+    "config.stages.update",
+  ]);
+  if (flow.isReadOnly() && MUTATING_COMMANDS.has(cmd.type)) {
+    replyError(
+      `${cmd.type} is not permitted: serve runs read-only. Run a sibling driver (flow run-all / overnight) to drive tasks.`,
+    );
+    return;
+  }
 
   try {
     switch (cmd.type) {
