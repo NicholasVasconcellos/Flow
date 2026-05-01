@@ -4,6 +4,7 @@ import { execa } from "execa";
 
 import type {
   Config,
+  ErrorKind,
   Notification,
   Session,
   TaskDef,
@@ -322,7 +323,12 @@ export class Scheduler {
       const task = this.state.getTask(taskId);
       if (!task || task.status !== "running") continue;
       task.status = "paused";
-      task.lastError = { stage: task.stage, message, at: nowIso() };
+      task.lastError = {
+        kind: "recovery_reset",
+        stage: task.stage,
+        message,
+        at: nowIso(),
+      };
       task.updatedAt = nowIso();
       this.state.upsertTask(task);
       updated.push({ ...task });
@@ -374,6 +380,7 @@ export class Scheduler {
       if (task.status !== "running") continue;
       task.status = "paused";
       task.lastError = {
+        kind: "recovery_reset",
         stage: task.stage,
         message:
           "Orchestrator exited while this task was running; reset on startup.",
@@ -637,10 +644,10 @@ export class Scheduler {
       // MissingSkillError — retrying won't materialize the file.
       if (err instanceof MissingSkillError) {
         const message = `Skill "${err.skillName}" missing at ${err.skillPath}. Re-run \`flow init\` to install bundled skills, then resume the task.`;
-        return await this.markPaused(taskId, stage, "", message);
+        return await this.markPaused(taskId, stage, "", message, "agent_error");
       }
       const message = `${stage} crashed before producing a session: ${(err as Error).message}`;
-      return await this.markPaused(taskId, stage, "", message);
+      return await this.markPaused(taskId, stage, "", message, "agent_error");
     }
 
     this.state.upsertSession(session);
@@ -664,14 +671,27 @@ export class Scheduler {
     // or HEAD state.
     if (session.status === "failed") {
       const err = session.error ?? `Stage ${stage} failed`;
+      const sessionKind = session.errorKind;
       if (isBlockedError(err)) {
-        return await this.markBlocked(taskId, stage, session.id, err);
+        return await this.markBlocked(
+          taskId,
+          stage,
+          session.id,
+          err,
+          sessionKind,
+        );
       }
       if (isLoopedOnBlockedTool(err)) {
         // Non-retryable: the agent is stuck re-issuing the same Bash command.
         // Pause directly so a human can investigate (e.g. a GUI subprocess
         // hanging on a modal). Do not consume retries.
-        return await this.markPaused(taskId, stage, session.id, err);
+        return await this.markPaused(
+          taskId,
+          stage,
+          session.id,
+          err,
+          sessionKind ?? "looped_tool",
+        );
       }
     }
 
@@ -702,19 +722,26 @@ export class Scheduler {
     // with a budget so the user notices.
     if (signal && signal.status === "done" && signal.stage !== stage) {
       const msg = `Stage signal mismatch: agent wrote stage="${signal.stage}" but expected "${stage}"`;
-      return await this.bumpRetryOrPause(taskId, stage, session.id, msg);
+      return await this.bumpRetryOrPause(
+        taskId,
+        stage,
+        session.id,
+        msg,
+        "stage_signal_mismatch",
+      );
     }
 
     // Failed session that wasn't rescued: transient retry first (no budget
     // consumption), then the regular retry/pause budget.
     if (session.status === "failed") {
       const err = session.error ?? `Stage ${stage} failed`;
+      const sessionKind = session.errorKind;
       if (
         session.transientError &&
         (task.transientRetries ?? 0) < TRANSIENT_RETRY_CAP
       ) {
         task.transientRetries = (task.transientRetries ?? 0) + 1;
-        task.lastError = { stage, message: err, at: nowIso() };
+        task.lastError = { kind: sessionKind, stage, message: err, at: nowIso() };
         task.updatedAt = nowIso();
         this.state.upsertTask(task);
         await this.saveState();
@@ -724,7 +751,13 @@ export class Scheduler {
           addendum: `# Previous attempt error\nStage ${stage} failed transiently:\n${err}\n\nPlease resume and continue.`,
         };
       }
-      return await this.bumpRetryOrPause(taskId, stage, session.id, err);
+      return await this.bumpRetryOrPause(
+        taskId,
+        stage,
+        session.id,
+        err,
+        sessionKind,
+      );
     }
 
     // Success-but-no-rescue cases:
@@ -748,7 +781,13 @@ export class Scheduler {
     const noProgressMsg = signal
       ? `Stage signal "done" but no commit was made on the worktree branch (this stage requires a commit).`
       : `Stage finished without a stage signal and without committing.`;
-    return await this.bumpRetryOrPause(taskId, stage, session.id, noProgressMsg);
+    return await this.bumpRetryOrPause(
+      taskId,
+      stage,
+      session.id,
+      noProgressMsg,
+      "no_commit",
+    );
   }
 
   /** Decide what to do after `exec_ui_check` finalizes: read the round-N
@@ -783,6 +822,7 @@ export class Scheduler {
         "exec_ui_check",
         sessionId,
         `FLOW_BLOCKED: ${reason}`,
+        "agent_error",
       );
       return { kind: "blocked" };
     }
@@ -815,13 +855,14 @@ export class Scheduler {
     stage: AgentStage,
     sessionId: string,
     err: string,
+    errorKind?: ErrorKind,
   ): Promise<
     { kind: "retry"; addendum: string } | { kind: "paused" }
   > {
     const task = this.requireTask(taskId);
     if (task.retries < this.config.retryCount) {
       task.retries += 1;
-      task.lastError = { stage, message: err, at: nowIso() };
+      task.lastError = { kind: errorKind, stage, message: err, at: nowIso() };
       task.updatedAt = nowIso();
       this.state.upsertTask(task);
       await this.saveState();
@@ -831,7 +872,7 @@ export class Scheduler {
         addendum: `# Previous attempt error\nStage ${stage} failed:\n${err}\n\nPlease fix and retry.`,
       };
     }
-    return await this.markPaused(taskId, stage, sessionId, err);
+    return await this.markPaused(taskId, stage, sessionId, err, errorKind);
   }
 
   private async markBlocked(
@@ -839,10 +880,11 @@ export class Scheduler {
     stage: AgentStage,
     sessionId: string,
     err: string,
+    errorKind?: ErrorKind,
   ): Promise<{ kind: "blocked" }> {
     const task = this.requireTask(taskId);
     task.status = "blocked";
-    task.lastError = { stage, message: err, at: nowIso() };
+    task.lastError = { kind: errorKind, stage, message: err, at: nowIso() };
     task.updatedAt = nowIso();
     this.state.upsertTask(task);
     await this.saveState();
@@ -862,10 +904,11 @@ export class Scheduler {
     stage: AgentStage,
     sessionId: string,
     err: string,
+    errorKind?: ErrorKind,
   ): Promise<{ kind: "paused" }> {
     const task = this.requireTask(taskId);
     task.status = "paused";
-    task.lastError = { stage, message: err, at: nowIso() };
+    task.lastError = { kind: errorKind, stage, message: err, at: nowIso() };
     task.updatedAt = nowIso();
     this.state.upsertTask(task);
     await this.saveState();
@@ -911,11 +954,23 @@ export class Scheduler {
     if (session.status === "failed") {
       const err = session.error ?? "commit_recovery failed";
       if (isBlockedError(err)) {
-        return await this.markBlocked(taskId, parentStage, session.id, err);
+        return await this.markBlocked(
+          taskId,
+          parentStage,
+          session.id,
+          err,
+          "commit_recovery_failed",
+        );
       }
       // looped_on_blocked_tool also pauses (non-retryable, mirrors the
       // runAgentStage path). markPaused already handles other failures.
-      return await this.markPaused(taskId, parentStage, session.id, err);
+      return await this.markPaused(
+        taskId,
+        parentStage,
+        session.id,
+        err,
+        "commit_recovery_failed",
+      );
     }
 
     const stillDirty = await this.git.hasUncommittedChanges(taskId);
@@ -925,6 +980,7 @@ export class Scheduler {
         parentStage,
         session.id,
         `commit_recovery left uncommitted changes after running.`,
+        "commit_recovery_failed",
       );
     }
     return { kind: "ok" };
@@ -1264,7 +1320,12 @@ export class Scheduler {
   ): Promise<{ kind: "blocked" }> {
     const task = this.requireTask(taskId);
     task.status = "blocked";
-    task.lastError = { stage: "merged", message: err, at: nowIso() };
+    task.lastError = {
+      kind: "agent_error",
+      stage: "merged",
+      message: err,
+      at: nowIso(),
+    };
     task.updatedAt = nowIso();
     this.state.upsertTask(task);
     await this.saveState();
@@ -1309,7 +1370,12 @@ export class Scheduler {
   ): Promise<{ kind: "paused" }> {
     const task = this.requireTask(taskId);
     task.status = "paused";
-    task.lastError = { stage: "merged", message, at: nowIso() };
+    task.lastError = {
+      kind: "agent_error",
+      stage: "merged",
+      message,
+      at: nowIso(),
+    };
     task.updatedAt = nowIso();
     this.state.upsertTask(task);
     await this.saveState();
@@ -1404,6 +1470,7 @@ export class Scheduler {
             if (t) {
               t.status = "paused";
               t.lastError = {
+                kind: "agent_error",
                 stage: t.stage,
                 message: `runTask threw unexpectedly: ${(err as Error).message}`,
                 at: nowIso(),
@@ -1478,6 +1545,7 @@ export class Scheduler {
               ...t,
               status: "paused",
               lastError: {
+                kind: "agent_error",
                 stage: t.stage,
                 message: (err as Error).message,
                 at: nowIso(),

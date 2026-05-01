@@ -1327,6 +1327,7 @@ export class AgentRunner {
       // Stream iteration failure — treat as a failed session below.
       session.error = `Stream error: ${(err as Error).message}`;
       session.transientError = true;
+      session.errorKind = "agent_error";
     } finally {
       if (stallTimer) {
         clearTimeout(stallTimer);
@@ -1359,6 +1360,7 @@ export class AgentRunner {
           ? `${loopedToolKey.slice(0, 80)}…`
           : loopedToolKey;
       session.error = `looped_on_blocked_tool: agent re-issued the same Bash command ${loopedToolCount} times consecutively with no successful intervening result: ${truncated}`;
+      session.errorKind = "looped_tool";
     } else if (stalledByWatchdog) {
       // E1: wall-clock stall. Treated as a normal stage failure (consumes a
       // retry slot) — except when the session also saw a rate_limit_event,
@@ -1369,11 +1371,15 @@ export class AgentRunner {
       session.error = `Stall: no assistant progress for ${stallTimeoutMs}ms`;
       if (sawRateLimitEvent) {
         session.transientError = true;
+        session.errorKind = "rate_limit";
+      } else {
+        session.errorKind = "stall";
       }
     } else if (stale) {
       session.status = "failed";
       session.error = `Session stale: ${consecutiveRetries} consecutive api_retry events with no progress`;
       session.transientError = true;
+      session.errorKind = "agent_error";
     } else if (exitCode !== 0) {
       session.status = "failed";
       if (!session.error) {
@@ -1386,9 +1392,11 @@ export class AgentRunner {
             : `Claude exited with code ${exitCode}`;
         }
       }
+      if (!session.errorKind) session.errorKind = "agent_error";
     } else if (cliErrorResult) {
       session.status = "failed";
       if (!session.error) session.error = cliErrorResult;
+      if (!session.errorKind) session.errorKind = "agent_error";
     } else if (session.autocompacted) {
       session.status = "autocompacted";
     } else {

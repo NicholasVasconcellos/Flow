@@ -89,7 +89,26 @@ export const TasksFileSchema = z.object({
 });
 export type TasksFile = z.infer<typeof TasksFileSchema>;
 
+/** Discriminator for failure-mode classification. Decouples retry policy
+ *  from free-form `message` strings so the scheduler can decide retry vs.
+ *  pause vs. fatal without parsing text. Optional for back-compat with
+ *  pre-existing on-disk state. */
+export const ErrorKindSchema = z.enum([
+  "stall",
+  "looped_tool",
+  "api_stream_idle",
+  "zero_token_kill",
+  "rate_limit",
+  "stage_signal_mismatch",
+  "no_commit",
+  "commit_recovery_failed",
+  "recovery_reset",
+  "agent_error",
+]);
+export type ErrorKind = z.infer<typeof ErrorKindSchema>;
+
 export const TaskErrorSchema = z.object({
+  kind: ErrorKindSchema.optional(),
   stage: TaskStageSchema,
   message: z.string(),
   at: z.string(),
@@ -188,6 +207,10 @@ export const SessionSchema = z.object({
    *  scheduler uses this to retry without consuming the agent-logic retry
    *  budget. */
   transientError: z.boolean().optional(),
+  /** Failure-mode discriminator written by the agent when the session
+   *  fails. Read by the scheduler to drive retry policy without parsing
+   *  the free-form `error` string. Optional for back-compat. */
+  errorKind: ErrorKindSchema.optional(),
   /** Latest `resetsAt` (Unix seconds) seen on a `rate_limit_event` for this
    *  session. Drives `flow overnight` — when transient pause is rate-limit
    *  driven, the loop sleeps until this timestamp before resuming. */
