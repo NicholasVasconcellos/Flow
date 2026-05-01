@@ -44,6 +44,7 @@ function makeConfig(): Config {
     verify: { timeoutMs: 300_000 },
     ws: { port: 7777 },
     pricing: {},
+    infraKinds: ["api_stream_idle", "zero_token_kill", "stall"],
   };
 }
 

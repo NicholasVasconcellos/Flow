@@ -696,3 +696,106 @@ test("scenario G: real fatal coexisting with review pause still exits fatal, cou
   const log = await fs.readFile(path.join(dir, "overnight.log"), "utf8");
   assert.match(log, /result=fatal merged=0 fatal=1 review=1 transient=0/);
 });
+
+test("--endless: agent_error pause with runnable work falls through to wait+resume instead of fatal", async () => {
+  const dir = await mkTmp();
+  const startMs = new Date("2026-04-29T22:00:00.000Z").getTime();
+  const clock = makeFakeClock(startMs);
+
+  // Cycle 1: T1 paused with agent_error (would be fatal in default mode);
+  // T2 still pending. After resume, both reach merged.
+  const tFatal = makeTask({
+    id: "T1",
+    status: "paused",
+    currentSessionId: "S1",
+    sessionIds: ["S1"],
+    lastError: {
+      kind: "agent_error",
+      stage: "exec",
+      message: "boom",
+      at: "2026-04-29T22:00:00.000Z",
+    },
+  });
+  const tPending = makeTask({ id: "T2", status: "pending" });
+  const sFatal = makeSession({
+    id: "S1",
+    taskId: "T1",
+    status: "failed",
+    transientError: false,
+  });
+  const merged1 = makeTask({ id: "T1", status: "merged" });
+  const merged2 = makeTask({ id: "T2", status: "merged" });
+
+  const fake = makeFakeFlow({
+    snapshots: [
+      { tasks: [tFatal, tPending], sessions: [sFatal] },
+      { tasks: [merged1, merged2], sessions: [sFatal] },
+    ],
+  });
+
+  const result = await runOvernight(
+    {
+      flow: fake.flow,
+      logFilePath: path.join(dir, "overnight.log"),
+      print: () => {},
+      now: clock.now,
+      sleep: clock.sleep,
+    },
+    { endless: true },
+  );
+
+  assert.equal(result.kind, "done");
+  assert.equal(fake.runAllCalls, 2);
+  assert.equal(fake.resumeCalls, 1);
+  const log = await fs.readFile(path.join(dir, "overnight.log"), "utf8");
+  assert.match(log, /result=continue.*fatal=1/);
+  assert.doesNotMatch(log, /result=fatal/);
+});
+
+test("infraKinds reclassifies stall pause as review, not fatal", async () => {
+  const dir = await mkTmp();
+  const startMs = new Date("2026-04-29T22:00:00.000Z").getTime();
+  const clock = makeFakeClock(startMs);
+
+  const tStall = makeTask({
+    id: "T1",
+    status: "paused",
+    currentSessionId: "S1",
+    sessionIds: ["S1"],
+    lastError: {
+      kind: "stall",
+      stage: "exec",
+      message: "Stall: 180s",
+      at: "2026-04-29T22:00:00.000Z",
+    },
+  });
+  const sStall = makeSession({
+    id: "S1",
+    taskId: "T1",
+    status: "failed",
+    transientError: false,
+  });
+
+  const fake = makeFakeFlow({
+    snapshots: [{ tasks: [tStall], sessions: [sStall] }],
+  });
+
+  const result = await runOvernight(
+    {
+      flow: fake.flow,
+      logFilePath: path.join(dir, "overnight.log"),
+      print: () => {},
+      now: clock.now,
+      sleep: clock.sleep,
+    },
+    {},
+  );
+
+  // Without --endless and with no transient, the loop still classifies
+  // as fatal (no runnable + no transient) — but `stall` must NOT be
+  // counted under fatal. fatalCount should be 0; review should be 1.
+  assert.equal(result.kind, "fatal");
+  if (result.kind === "fatal") assert.equal(result.fatalCount, 0);
+  const log = await fs.readFile(path.join(dir, "overnight.log"), "utf8");
+  assert.match(log, /fatal=0 review=1/);
+});

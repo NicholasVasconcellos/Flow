@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { writeJsonAtomic } from "./atomic.js";
 import type { Flow } from "./flow.js";
-import type { Session, TaskRuntime } from "./types.js";
+import type { ErrorKind, Session, TaskRuntime } from "./types.js";
 
 /** Worker process exit codes. The supervisor reads these to decide whether to
  *  restart. EXIT_FATAL/EXIT_LOCK_CONFLICT are sysexits-inspired distinct codes
@@ -46,7 +46,26 @@ export interface OvernightDeps {
 export interface OvernightOpts {
   /** Defer start until the next occurrence of this HH:MM clock time. */
   atTime?: string;
+  /** When true, the cycle classifier never returns `fatal` while the queue
+   *  still has runnable work (`pending` / `ready` / `running`). Fatal-class
+   *  pauses fall through to the wait-then-resume step instead of exiting,
+   *  so an unattended overnight run keeps draining the DAG even after an
+   *  agent-logic failure. Default `false` preserves CI/automation that
+   *  relies on the fatal exit code as a stop signal. */
+  endless?: boolean;
+  /** Error kinds treated as infrastructure failures rather than fatal
+   *  agent-logic failures. Tasks paused with one of these kinds are
+   *  excluded from the cycle's fatal count and counted under `review`.
+   *  Falls back to a defensive default when the caller doesn't supply
+   *  the project's config-driven set. */
+  infraKinds?: ReadonlyArray<ErrorKind>;
 }
+
+const DEFAULT_INFRA_KINDS: ReadonlyArray<ErrorKind> = [
+  "api_stream_idle",
+  "zero_token_kill",
+  "stall",
+];
 
 export type OvernightOutcome =
   | {
@@ -209,57 +228,104 @@ export async function runOvernight(
       t.status === "paused" && latestSession(t)?.transientError === true;
     const isReviewRequestedPaused = (t: TaskRuntime): boolean =>
       t.status === "paused" && latestSession(t)?.reviewRequested != null;
+    const infraKinds = new Set<ErrorKind>(
+      opts.infraKinds ?? DEFAULT_INFRA_KINDS,
+    );
+    const isInfraKindPaused = (t: TaskRuntime): boolean => {
+      if (t.status !== "paused") return false;
+      const k = t.lastError?.kind;
+      return k !== undefined && infraKinds.has(k);
+    };
 
     const transient = tasks.filter(isTransientPaused);
     const reviewRequested = tasks.filter(isReviewRequestedPaused);
+    const infraPaused = tasks.filter(isInfraKindPaused);
     const fatal = tasks.filter(
       (t) =>
         (t.status === "paused" &&
           !isTransientPaused(t) &&
-          !isReviewRequestedPaused(t)) ||
+          !isReviewRequestedPaused(t) &&
+          !isInfraKindPaused(t)) ||
         t.status === "blocked",
+    );
+    const reviewCount = reviewRequested.length + infraPaused.length;
+    const hasRunnable = tasks.some(
+      (t) =>
+        t.status === "pending" ||
+        t.status === "ready" ||
+        t.status === "running",
     );
 
     if (fatal.length > 0) {
-      const elapsedMs = now() - startedAt;
-      await log(
-        `[${new Date(now()).toISOString()}] cycle=${cycle} result=fatal merged=${mergedCount} fatal=${fatal.length} review=${reviewRequested.length} transient=${transient.length} cycles=${cycle} elapsed=${formatElapsed(elapsedMs)}`,
-      );
-      return await writeOutcome({
-        kind: "fatal",
-        cycles: cycle,
-        fatalCount: fatal.length,
-        mergedCount,
-        elapsedMs,
-      });
-    }
-
-    if (transient.length === 0) {
-      if (reviewRequested.length > 0) {
+      // --endless: as long as runnable work remains, infra-class pauses
+      // shouldn't cause the worker to exit. Log "result=continue" and
+      // fall through to the wait-then-resume branch so the loop can
+      // pick paused tasks back up after a backoff window.
+      if (!opts.endless) {
         const elapsedMs = now() - startedAt;
         await log(
-          `[${new Date(now()).toISOString()}] cycle=${cycle} result=needs_review review=${reviewRequested.length} merged=${mergedCount} cycles=${cycle} elapsed=${formatElapsed(elapsedMs)}`,
+          `[${new Date(now()).toISOString()}] cycle=${cycle} result=fatal merged=${mergedCount} fatal=${fatal.length} review=${reviewCount} transient=${transient.length} cycles=${cycle} elapsed=${formatElapsed(elapsedMs)}`,
         );
         return await writeOutcome({
-          kind: "needs-review",
+          kind: "fatal",
           cycles: cycle,
-          reviewCount: reviewRequested.length,
+          fatalCount: fatal.length,
           mergedCount,
           elapsedMs,
         });
       }
-      // No work to do but DAG isn't drained — treat as fatal so we don't spin.
-      const elapsedMs = now() - startedAt;
+      if (!hasRunnable && transient.length === 0) {
+        // All non-fatal work drained; nothing to wait on. Exit fatal even
+        // in endless mode rather than spinning indefinitely.
+        const elapsedMs = now() - startedAt;
+        await log(
+          `[${new Date(now()).toISOString()}] cycle=${cycle} result=fatal merged=${mergedCount} fatal=${fatal.length} review=${reviewCount} transient=0 cycles=${cycle} elapsed=${formatElapsed(elapsedMs)} reason=endless-exhausted`,
+        );
+        return await writeOutcome({
+          kind: "fatal",
+          cycles: cycle,
+          fatalCount: fatal.length,
+          mergedCount,
+          elapsedMs,
+        });
+      }
       await log(
-        `[${new Date(now()).toISOString()}] cycle=${cycle} result=fatal merged=${mergedCount} fatal=0 cycles=${cycle} elapsed=${formatElapsed(elapsedMs)} reason=stalled-no-runnable-tasks`,
+        `[${new Date(now()).toISOString()}] cycle=${cycle} result=continue merged=${mergedCount} fatal=${fatal.length} review=${reviewCount} transient=${transient.length}`,
       );
-      return await writeOutcome({
-        kind: "fatal",
-        cycles: cycle,
-        fatalCount: 0,
-        mergedCount,
-        elapsedMs,
-      });
+    }
+
+    if (transient.length === 0 && fatal.length === 0) {
+      if (reviewRequested.length > 0) {
+        const elapsedMs = now() - startedAt;
+        await log(
+          `[${new Date(now()).toISOString()}] cycle=${cycle} result=needs_review review=${reviewCount} merged=${mergedCount} cycles=${cycle} elapsed=${formatElapsed(elapsedMs)}`,
+        );
+        return await writeOutcome({
+          kind: "needs-review",
+          cycles: cycle,
+          reviewCount,
+          mergedCount,
+          elapsedMs,
+        });
+      }
+      if (opts.endless && infraPaused.length > 0 && hasRunnable) {
+        // Pure infra-paused-with-runnable case: nothing transient to wait
+        // on, but endless mode wants to keep cycling. Fall through to
+        // fallback wait + resume.
+      } else {
+        // No work to do but DAG isn't drained — treat as fatal so we don't spin.
+        const elapsedMs = now() - startedAt;
+        await log(
+          `[${new Date(now()).toISOString()}] cycle=${cycle} result=fatal merged=${mergedCount} fatal=0 review=${reviewCount} cycles=${cycle} elapsed=${formatElapsed(elapsedMs)} reason=stalled-no-runnable-tasks`,
+        );
+        return await writeOutcome({
+          kind: "fatal",
+          cycles: cycle,
+          fatalCount: 0,
+          mergedCount,
+          elapsedMs,
+        });
+      }
     }
 
     let waitUntilMs = 0;

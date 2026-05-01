@@ -704,7 +704,10 @@ program
     },
   );
 
-async function runOvernightWorker(opts: { at?: string }): Promise<void> {
+async function runOvernightWorker(opts: {
+  at?: string;
+  endless?: boolean;
+}): Promise<void> {
   const flow = await createFlow({ projectPath: process.cwd() });
   installSigintHandler(flow);
   const lock = await acquireCliLock(flow, "overnight", {
@@ -714,13 +717,19 @@ async function runOvernightWorker(opts: { at?: string }): Promise<void> {
   try {
     await flow.ensureTasksLoaded();
     const flowDir = flow.getPaths().flowDir;
+    const cfg = flow.getConfig();
+    const overnightOpts: import("./overnight.js").OvernightOpts = {
+      ...(opts.at ? { atTime: opts.at } : {}),
+      ...(opts.endless ? { endless: true } : {}),
+      infraKinds: cfg.infraKinds,
+    };
     const result = await runOvernight(
       {
         flow,
         logFilePath: path.join(flowDir, "overnight.log"),
         lastResultPath: path.join(flowDir, "overnight.last-result.json"),
       },
-      opts.at ? { atTime: opts.at } : {},
+      overnightOpts,
     );
     if (result.kind === "fatal") {
       process.exitCode = EXIT_FATAL;
@@ -849,7 +858,11 @@ program
     "--at <hhmm>",
     "defer start until this clock time, 24h (e.g. 23:00)",
   )
-  .action(async (opts: { at?: string }) => {
+  .option(
+    "--endless",
+    "keep cycling through infra/agent failures while runnable work remains",
+  )
+  .action(async (opts: { at?: string; endless?: boolean }) => {
     if (opts.at !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(opts.at)) {
       // eslint-disable-next-line no-console
       console.error(

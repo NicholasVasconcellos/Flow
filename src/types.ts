@@ -340,6 +340,14 @@ export const ConfigSchema = z.object({
     })
     .default({ port: 7777 }),
   pricing: z.record(z.string(), PricingEntrySchema).default({}),
+  /** Error kinds that represent transport / infrastructure failures rather
+   *  than agent-logic failures. Tasks paused with one of these kinds are
+   *  excluded from the overnight loop's fatal-class aggregation, so an
+   *  upstream API blip can't trip the worker into a fatal exit. Default
+   *  set covers known no-retry kinds; users can extend via config.json. */
+  infraKinds: z
+    .array(ErrorKindSchema)
+    .default(["api_stream_idle", "zero_token_kill", "stall"]),
 });
 export type Config = z.infer<typeof ConfigSchema>;
 
