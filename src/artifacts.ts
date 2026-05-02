@@ -333,6 +333,10 @@ async function listSkillNames(skillsDir: string): Promise<string[]> {
     .sort();
 }
 
+// Mirrors mapPayloadToEventKind in agent.ts. Kept aligned so artifact replay
+// classifies the same way as live session.event emission — otherwise
+// type:"assistant" payloads carrying tool_use or thinking blocks all collapse
+// to assistant_text, and type:"user" tool_result payloads get dropped.
 function inferKind(payload: Record<string, unknown>): SessionEvent["kind"] {
   const type = payload["type"];
   switch (type) {
@@ -347,9 +351,33 @@ function inferKind(payload: Record<string, unknown>): SessionEvent["kind"] {
       return "usage";
     case "stop":
       return "stop";
-    case "assistant":
+    case "assistant": {
+      const blocks = contentBlocks(payload);
+      if (blocks.some((b) => b["type"] === "thinking" || b["type"] === "redacted_thinking")) {
+        return "assistant_thinking";
+      }
+      if (blocks.some((b) => b["type"] === "tool_use")) return "tool_use";
       return "assistant_text";
+    }
+    case "user": {
+      const blocks = contentBlocks(payload);
+      if (blocks.some((b) => b["type"] === "tool_result")) return "tool_result";
+      return "system";
+    }
     default:
       return "system";
   }
+}
+
+function contentBlocks(payload: Record<string, unknown>): Array<Record<string, unknown>> {
+  const pick = (arr: unknown): Array<Record<string, unknown>> | null => {
+    if (!Array.isArray(arr)) return null;
+    return arr.filter((b): b is Record<string, unknown> => !!b && typeof b === "object");
+  };
+  const message = payload["message"];
+  if (message && typeof message === "object") {
+    const fromMessage = pick((message as Record<string, unknown>)["content"]);
+    if (fromMessage) return fromMessage;
+  }
+  return pick(payload["content"]) ?? [];
 }
