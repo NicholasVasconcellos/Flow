@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { slugifyTitle } from "./ids.js";
+
 export const TaskStatusSchema = z.enum([
   "pending",
   "ready",
@@ -62,8 +64,13 @@ export const StageConfigSchema = z.object({
 });
 export type StageConfig = z.infer<typeof StageConfigSchema>;
 
-export const TaskDefSchema = z.object({
-  id: z.string().min(1),
+/** The on-disk shape of a task entry, before id derivation. `id` is
+ *  optional here so an agent can omit it and have Flow derive a slug from
+ *  `title` (matches `assets/skills/get-tasks/SKILL.md`'s slug rule).
+ *  Consumers should use `TaskDefSchema` / `TasksFileSchema`, which run the
+ *  derivation step and produce a guaranteed-present `id`. */
+const RawTaskDefSchema = z.object({
+  id: z.string().min(1).optional(),
   title: z.string().min(1),
   description: z.string(),
   contextFiles: z.array(z.string()).default([]),
@@ -82,11 +89,67 @@ export const TaskDefSchema = z.object({
    *  When false, the harness skips `code_review`. Default `true`. */
   hasCodeReview: z.boolean().default(true),
 });
+
+/** Single-task schema. Derives `id` from `title` when omitted; rejects
+ *  titles that slugify to nothing. Used by call sites that have one task
+ *  object in hand (`stagesForTask`, tests). For parsing the on-disk
+ *  `tasks.json`, prefer `TasksFileSchema` — it additionally handles
+ *  cross-task collisions. */
+export const TaskDefSchema = RawTaskDefSchema.transform((t, ctx) => {
+  const id = t.id ?? slugifyTitle(t.title);
+  if (!id) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["id"],
+      message: `Cannot derive id from title "${t.title}" — add an explicit id`,
+    });
+    return z.NEVER;
+  }
+  return { ...t, id };
+});
 export type TaskDef = z.infer<typeof TaskDefSchema>;
 
-export const TasksFileSchema = z.object({
-  tasks: z.array(TaskDefSchema),
-});
+/** Whole-file schema. Walks tasks in order, derives missing ids via
+ *  `slugifyTitle`, and auto-suffixes `-2`, `-3`, … on title-derived
+ *  collisions (matches the rule the `get-tasks` skill prompt documents).
+ *  Two tasks with the same *explicit* id stay an error — that's an agent
+ *  bug, not a naming clash to be papered over. */
+export const TasksFileSchema = z
+  .object({
+    tasks: z.array(RawTaskDefSchema),
+  })
+  .transform((file, ctx) => {
+    const seen = new Set<string>();
+    const tasks: TaskDef[] = [];
+    for (const [i, raw] of file.tasks.entries()) {
+      const wasExplicit = typeof raw.id === "string" && raw.id.length > 0;
+      let id = wasExplicit ? raw.id! : slugifyTitle(raw.title);
+      if (!id) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["tasks", i, "id"],
+          message: `Cannot derive id from title "${raw.title}" — add an explicit id`,
+        });
+        return z.NEVER;
+      }
+      if (seen.has(id)) {
+        if (wasExplicit) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["tasks", i, "id"],
+            message: `Duplicate explicit id "${id}"`,
+          });
+          return z.NEVER;
+        }
+        let n = 2;
+        while (seen.has(`${id}-${n}`)) n++;
+        id = `${id}-${n}`;
+      }
+      seen.add(id);
+      tasks.push({ ...raw, id });
+    }
+    return { tasks };
+  });
 export type TasksFile = z.infer<typeof TasksFileSchema>;
 
 /** Discriminator for failure-mode classification. Decouples retry policy
@@ -115,7 +178,11 @@ export const TaskErrorSchema = z.object({
 });
 export type TaskError = z.infer<typeof TaskErrorSchema>;
 
-export const TaskRuntimeSchema = TaskDefSchema.extend({
+// Runtime tasks always have an `id` — they're constructed from a TaskDef
+// after `TasksFileSchema` (or the StateStore) has already filled it in.
+// Extends the raw shape to keep `.extend` available; pins `id` as required.
+export const TaskRuntimeSchema = RawTaskDefSchema.extend({
+  id: z.string().min(1),
   status: TaskStatusSchema,
   stage: TaskStageSchema,
   retries: z.number().int().nonnegative(),

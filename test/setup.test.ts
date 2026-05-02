@@ -380,6 +380,125 @@ test("ensureTasksLoaded: existing tasks.json with a cycle throws with CYCLE + em
 });
 
 // ---------------------------------------------------------------------------
+// ensureTasksLoaded — id derivation
+// ---------------------------------------------------------------------------
+
+test("ensureTasksLoaded: tasks.json with omitted ids loads via title-derived slugs", async () => {
+  const root = await mkTmp();
+  const paths = new Paths(root);
+  await scaffoldFlowDir(paths, ASSETS_DIR);
+
+  // Raw on-disk shape — omits `id` on every task. `requires` references the
+  // canonical slug of the first title (matches what the get-tasks skill tells
+  // the agent to do).
+  const onDisk = {
+    tasks: [
+      { title: "Hello world", description: "first", contextFiles: [], requires: [] },
+      { title: "Use it", description: "second", contextFiles: [], requires: ["hello-world"] },
+    ],
+  };
+  await fs.writeFile(paths.tasksJson, JSON.stringify(onDisk), "utf8");
+
+  const state = new StateStore(paths);
+  await state.load();
+  const { agent, calls } = makeFakeAgent({ paths });
+  const { git } = makeFakeGit();
+
+  const defs = await ensureTasksLoaded({
+    paths,
+    config: defaultConfig(),
+    state,
+    git,
+    agent,
+    eventBus: new EventBus(),
+  });
+
+  assert.deepEqual(
+    defs.map((d) => d.id),
+    ["hello-world", "use-it"],
+  );
+  assert.equal(calls.length, 0, "no agent run — file was already on disk");
+  // Dependent state synced via canonical ids.
+  const tasks = state.getTasks();
+  assert.equal(tasks.find((t) => t.id === "hello-world")!.status, "ready");
+  assert.equal(tasks.find((t) => t.id === "use-it")!.status, "pending");
+});
+
+test("ensureTasksLoaded: title collision auto-suffixes -2 without notification", async () => {
+  const root = await mkTmp();
+  const paths = new Paths(root);
+  await scaffoldFlowDir(paths, ASSETS_DIR);
+
+  const onDisk = {
+    tasks: [
+      { title: "Setup", description: "", requires: [] },
+      { title: "setup!", description: "", requires: [] },
+    ],
+  };
+  await fs.writeFile(paths.tasksJson, JSON.stringify(onDisk), "utf8");
+
+  const state = new StateStore(paths);
+  await state.load();
+  const eventBus = new EventBus();
+  const notifs: Notification[] = [];
+  eventBus.on("notification", ({ notification }) => notifs.push(notification));
+  const { agent } = makeFakeAgent({ paths });
+  const { git } = makeFakeGit();
+
+  const defs = await ensureTasksLoaded({
+    paths,
+    config: defaultConfig(),
+    state,
+    git,
+    agent,
+    eventBus,
+  });
+
+  assert.deepEqual(
+    defs.map((d) => d.id),
+    ["setup", "setup-2"],
+  );
+  assert.equal(notifs.length, 0);
+});
+
+test("ensureTasksLoaded: explicit duplicate ids surface as Invalid tasks.json notification", async () => {
+  const root = await mkTmp();
+  const paths = new Paths(root);
+  await scaffoldFlowDir(paths, ASSETS_DIR);
+
+  const onDisk = {
+    tasks: [
+      { id: "foo", title: "First", description: "", requires: [] },
+      { id: "foo", title: "Second", description: "", requires: [] },
+    ],
+  };
+  await fs.writeFile(paths.tasksJson, JSON.stringify(onDisk), "utf8");
+
+  const state = new StateStore(paths);
+  await state.load();
+  const eventBus = new EventBus();
+  const notifs: Notification[] = [];
+  eventBus.on("notification", ({ notification }) => notifs.push(notification));
+  const { agent } = makeFakeAgent({ paths });
+  const { git } = makeFakeGit();
+
+  await assert.rejects(
+    ensureTasksLoaded({
+      paths,
+      config: defaultConfig(),
+      state,
+      git,
+      agent,
+      eventBus,
+    }),
+    (err: Error) => /Invalid tasks\.json/i.test(err.message) && /Duplicate explicit id .*foo/.test(err.message),
+  );
+  assert.equal(notifs.length, 1);
+  assert.equal(notifs[0]!.severity, "error");
+  assert.match(notifs[0]!.body, /Duplicate explicit id .*foo/);
+});
+
+// ---------------------------------------------------------------------------
 // runGetTasksSession — validation runs independently
 // ---------------------------------------------------------------------------
 

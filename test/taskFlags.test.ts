@@ -68,6 +68,86 @@ test("TasksFileSchema: legacy tasks.json without flags parses cleanly", () => {
 });
 
 // ---------------------------------------------------------------------------
+// id derivation from title
+// ---------------------------------------------------------------------------
+
+test("TaskDefSchema: derives id from title when omitted", () => {
+  const parsed = TaskDefSchema.parse({
+    title: "Hello World",
+    description: "",
+    contextFiles: [],
+    requires: [],
+  });
+  assert.equal(parsed.id, "hello-world");
+});
+
+test("TaskDefSchema: rejects task whose title slugifies to empty", () => {
+  const result = TaskDefSchema.safeParse({
+    title: "!!!",
+    description: "",
+    contextFiles: [],
+    requires: [],
+  });
+  assert.equal(result.success, false);
+  if (!result.success) {
+    assert.match(result.error.message, /Cannot derive id from title/);
+  }
+});
+
+test("TasksFileSchema: derives ids for every task with omitted id", () => {
+  const file = {
+    tasks: [
+      { title: "First Task", description: "", requires: [] },
+      { title: "Second Task", description: "", requires: ["first-task"] },
+    ],
+  };
+  const parsed = TasksFileSchema.parse(file);
+  assert.deepEqual(
+    parsed.tasks.map((t) => t.id),
+    ["first-task", "second-task"],
+  );
+});
+
+test("TasksFileSchema: auto-suffixes -2 on title-derived collision", () => {
+  const file = {
+    tasks: [
+      { title: "Setup", description: "", requires: [] },
+      { title: "setup!", description: "", requires: [] },
+      { title: "SETUP", description: "", requires: [] },
+    ],
+  };
+  const parsed = TasksFileSchema.parse(file);
+  assert.deepEqual(
+    parsed.tasks.map((t) => t.id),
+    ["setup", "setup-2", "setup-3"],
+  );
+});
+
+test("TasksFileSchema: rejects two tasks with the same explicit id", () => {
+  const file = {
+    tasks: [
+      { id: "foo", title: "First", description: "", requires: [] },
+      { id: "foo", title: "Second", description: "", requires: [] },
+    ],
+  };
+  const result = TasksFileSchema.safeParse(file);
+  assert.equal(result.success, false);
+  if (!result.success) {
+    assert.match(result.error.message, /Duplicate explicit id .*foo/);
+  }
+});
+
+test("TasksFileSchema: explicit id round-trips unchanged when no collision", () => {
+  const file = {
+    tasks: [
+      { id: "manual-id", title: "Whatever", description: "", requires: [] },
+    ],
+  };
+  const parsed = TasksFileSchema.parse(file);
+  assert.equal(parsed.tasks[0]!.id, "manual-id");
+});
+
+// ---------------------------------------------------------------------------
 // stagesForTask filtering
 // ---------------------------------------------------------------------------
 
