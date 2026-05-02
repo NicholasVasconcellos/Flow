@@ -1,5 +1,5 @@
 CLAUDE.md            — Project guidance for Claude (issues/, learnings/ workflow)
-README.md            — Quick-start: build, run-all, overnight loop
+README.md            — Quick-start: install, init, run + UI, CLI ref, overnight
 plan.md              — Full Flow specification (DAG, lifecycle, WS contract §14)
 package.json         — Node package manifest; `flow` CLI bin → dist/cli.js
 tsconfig.json        — TS config for typecheck (lint)
