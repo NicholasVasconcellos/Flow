@@ -256,29 +256,50 @@ function buildLogEvent(event) {
   }
 
   if (kind === 'tool_use') {
-    const tool = payload.name ?? payload.type ?? null;
-    const input = payload.input ?? null;
-    return { ...base, tool, input };
+    // Wire payload is usually `{type:"assistant", message:{content:[{type:"tool_use", id, name, input}, ...]}}`.
+    // Top-level `{type:"tool_use", ...}` shape is also possible — fall back to it.
+    const block = findContentBlock(payload, (b) => b?.type === 'tool_use');
+    const tool = block?.name ?? payload.name ?? null;
+    const input = block?.input ?? payload.input ?? null;
+    const toolUseId = block?.id ?? payload.id ?? null;
+    return { ...base, tool, input, toolUseId };
   }
 
   if (kind === 'tool_result') {
     const result = payload.tool_use_result ?? null;
+    const block = findContentBlock(payload, (b) => b?.type === 'tool_result');
     let content = null;
-    const msgContent = payload.message?.content;
-    if (Array.isArray(msgContent)) {
-      const block = msgContent.find((b) => b.type === 'tool_result');
-      if (block) {
-        content = typeof block.content === 'string'
-          ? block.content
-          : block.content != null ? JSON.stringify(block.content) : null;
-      }
+    if (block) {
+      content = typeof block.content === 'string'
+        ? block.content
+        : block.content != null ? JSON.stringify(block.content) : null;
     }
     if (content == null) content = payload.content ?? extractContent(payload);
-    return { ...base, result, content };
+    const toolUseId = block?.tool_use_id ?? payload.tool_use_id ?? null;
+    const isError = block?.is_error === true || result?.is_error === true;
+    return { ...base, result, content, toolUseId, isError };
   }
 
   // Passthrough for any other kept kinds
   return { ...base, payload };
+}
+
+/**
+ * Find the first block in `payload.message.content` (or `payload.content`)
+ * matching `predicate`. Returns null if none.
+ */
+function findContentBlock(payload, predicate) {
+  const msgArr = payload?.message?.content;
+  if (Array.isArray(msgArr)) {
+    const block = msgArr.find(predicate);
+    if (block) return block;
+  }
+  const arr = payload?.content;
+  if (Array.isArray(arr)) {
+    const block = arr.find(predicate);
+    if (block) return block;
+  }
+  return null;
 }
 
 /**

@@ -3,7 +3,9 @@ import { I } from './icons.jsx';
 import { Panel, StatusBadge, ContextDonut, formatK, formatCost } from './primitives.jsx';
 import { useArtifact } from './useArtifact.js';
 
-// Log column — renders formatted session log events
+// Log column — renders formatted session log events.
+// Row + detail layout: icon dot, kind label, summary, meta (time).
+// Click to expand. tool_use rows pull in their paired tool_result.
 
 const LOG_FILTER_TYPES = [
   { kind: "user",           label: "User" },
@@ -13,8 +15,8 @@ const LOG_FILTER_TYPES = [
 ];
 
 const LogColumn = ({ session, events, onClose, onExpand, collapsed, fixedWidth }) => {
-  const [collapsedEvents, setCollapsedEvents] = React.useState({});
-  const toggleEvt = (id) => setCollapsedEvents(s => ({ ...s, [id]: !s[id] }));
+  const [openEvents, setOpenEvents] = React.useState({});
+  const toggleEvt = (id) => setOpenEvents(s => ({ ...s, [id]: !s[id] }));
 
   // Filter state — all types visible by default
   const [enabled, setEnabled] = React.useState(
@@ -22,6 +24,16 @@ const LogColumn = ({ session, events, onClose, onExpand, collapsed, fixedWidth }
   );
   const [filterOpen, setFilterOpen] = React.useState(false);
   const filterRef = React.useRef(null);
+
+  // Group mode — turn (default) or flat
+  const [groupMode, setGroupMode] = React.useState('turn');
+
+  // 1Hz tick to refresh "Xs ago" relative timestamps
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   React.useEffect(() => {
     if (!filterOpen) return;
@@ -32,19 +44,19 @@ const LogColumn = ({ session, events, onClose, onExpand, collapsed, fixedWidth }
     return () => document.removeEventListener("mousedown", onDoc);
   }, [filterOpen]);
 
-  // Lazily replay this session's full event JSONL on first render. Idempotent
-  // across mounts/StrictMode via the module-scope inflight map in useArtifact.
-  // The hook is called unconditionally (rules-of-hooks); it no-ops when
-  // session?.id is missing.
+  // Lazily replay this session's full event JSONL on first render.
+  // Hook is called unconditionally before any early return (rules-of-hooks).
   useArtifact('session.events', { sessionId: session?.id });
 
   if (!session) return null;
+
   const allSessionEvents = events
     .filter(e => e.sessionId === session.id)
     .sort((a, b) => (a.ts ?? '').localeCompare(b.ts ?? ''));
   const sessionEvents = allSessionEvents.filter(e => enabled[e.kind] !== false);
   const activeCount = LOG_FILTER_TYPES.filter(t => enabled[t.kind]).length;
   const filtersActive = activeCount < LOG_FILTER_TYPES.length;
+  const turns = buildTurns(sessionEvents);
 
   const style = fixedWidth
     ? { flex: `0 0 ${fixedWidth}px`, width: fixedWidth, minWidth: fixedWidth, maxWidth: fixedWidth }
@@ -136,6 +148,31 @@ const LogColumn = ({ session, events, onClose, onExpand, collapsed, fixedWidth }
               </button>
             );
           })}
+          <div style={{ height: 1, background: "var(--border-2)", margin: "6px 4px" }}/>
+          <button
+            onClick={() => setGroupMode(m => m === 'turn' ? 'flat' : 'turn')}
+            style={{
+              display: "flex", alignItems: "center", gap: 8,
+              width: "100%", padding: "6px 8px",
+              background: "transparent", border: "none",
+              borderRadius: "var(--r-sm)",
+              cursor: "pointer", color: "var(--text-1)",
+              fontSize: 12, textAlign: "left",
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = "var(--bg-2)"}
+            onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+          >
+            <span style={{
+              width: 14, height: 14, borderRadius: 3,
+              border: `1px solid ${groupMode === 'turn' ? "var(--accent)" : "var(--border-2)"}`,
+              background: groupMode === 'turn' ? "var(--accent)" : "transparent",
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              color: "#fff", flexShrink: 0,
+            }}>
+              {groupMode === 'turn' && <I.Check size={10}/>}
+            </span>
+            <span style={{ flex: 1 }}>Group by turn</span>
+          </button>
         </div>
       )}
     </div>
@@ -254,137 +291,493 @@ const LogColumn = ({ session, events, onClose, onExpand, collapsed, fixedWidth }
       )}
 
       {/* Events */}
-      <div style={{ padding: "8px 0" }}>
-        {sessionEvents.length === 0 && (
+      <div className={"log-events" + (groupMode === 'flat' ? ' flat' : '')} style={{ padding: "8px 0" }}>
+        {turns.length === 0 && (
           <div style={{ padding: 24, textAlign: "center", color: "var(--text-4)", fontSize: 12 }}>
             {allSessionEvents.length === 0
               ? <>No events yet. Session {session.status}.</>
               : <>No events match the active filter.</>}
           </div>
         )}
-        {sessionEvents.map(ev => (
-          <LogEvent key={ev.id} ev={ev} collapsed={collapsedEvents[ev.id]} onToggle={() => toggleEvt(ev.id)} />
+        {turns.map((turn, i) => (
+          <Turn
+            key={i}
+            turn={turn}
+            index={i + 1}
+            groupMode={groupMode}
+            now={now}
+            openEvents={openEvents}
+            onToggle={toggleEvt}
+            showResult={enabled.tool_result !== false}
+          />
         ))}
       </div>
     </Panel>
   );
 };
 
-const LogEvent = ({ ev, collapsed, onToggle }) => {
-  const { icon, color, label } = eventStyle(ev);
-  const body = renderBody(ev, collapsed);
-  const canCollapse = ev.kind === "tool_use" || ev.kind === "tool_result";
+// ---------------------------------------------------------------------------
+// Turn grouping — pair tool_use with tool_result, group consecutive
+// non-user events into an assistant turn.
+// ---------------------------------------------------------------------------
+function buildTurns(events) {
+  // Pair tool_use ↔ tool_result by toolUseId.
+  const byId = {};
+  for (const e of events) {
+    if (e.kind === 'tool_use' && e.toolUseId) byId[e.toolUseId] = e;
+  }
+  // Build a side-channel result map so we don't mutate event objects.
+  const pairedResultIds = new Set();
+  const resultByToolId = {};
+  for (const e of events) {
+    if (e.kind === 'tool_result' && e.toolUseId && byId[e.toolUseId]) {
+      resultByToolId[e.toolUseId] = e;
+      pairedResultIds.add(e.id);
+    }
+  }
+
+  const turns = [];
+  let cur = null;
+  for (const e of events) {
+    if (pairedResultIds.has(e.id)) continue;
+    if (e.kind === 'user') {
+      if (cur) { turns.push(cur); cur = null; }
+      turns.push({ kind: 'user', events: [e], ts: e.ts });
+      continue;
+    }
+    if (!cur) cur = { kind: 'assistant', events: [], ts: e.ts };
+    cur.events.push(e);
+  }
+  if (cur) turns.push(cur);
+
+  for (const t of turns) {
+    t.endTs = t.events[t.events.length - 1]?.ts ?? t.ts;
+  }
+  return turns.map(t => ({ ...t, resultByToolId }));
+}
+
+// ---------------------------------------------------------------------------
+// Turn renderer
+// ---------------------------------------------------------------------------
+function Turn({ turn, index, groupMode, now, openEvents, onToggle, showResult }) {
+  const showDivider = groupMode === 'turn' && turn.kind === 'assistant' && turn.events.length > 1;
+  const singleRow = turn.events.length === 1;
   return (
-    <div style={{
-      display: "flex", gap: 8,
-      padding: "6px 12px 6px 10px",
-      borderLeft: `2px solid ${ev.kind === "user" ? "var(--accent)" : "transparent"}`,
-      background: ev.kind === "user" ? "rgba(217,119,87,0.04)" : "transparent",
-      fontSize: 11.5,
-    }}>
-      <div style={{ width: 16, paddingTop: 2, color }}>
-        {icon}
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
-          <span style={{ fontSize: 10.5, fontWeight: 600, color, textTransform: "uppercase", letterSpacing: "0.04em" }}>
-            {label}
-          </span>
-          {ev.tool && <span className="mono" style={{ fontSize: 10.5, color: "var(--text-2)" }}>{ev.tool}</span>}
-          <span className="mono" style={{ fontSize: 10, color: "var(--text-4)", marginLeft: "auto" }}>{ev.t}</span>
-          {canCollapse && (
-            <button className="icon-btn" onClick={onToggle} style={{ width: 16, height: 16 }}>
-              {collapsed ? <I.ChevronRt size={10}/> : <I.Chevron size={10}/>}
-            </button>
-          )}
+    <>
+      {showDivider && (
+        <div className="turn-divider">
+          <span>Turn {index}</span>
+          <span className="line" />
+          <span className="meta-time">{fmtTime(turn.ts)}</span>
         </div>
-        {!collapsed && body}
+      )}
+      <div className={"turn" + (singleRow ? " single-row" : "") + (groupMode === 'flat' ? " flat" : "")}>
+        {turn.events.map(ev => (
+          <Row
+            key={ev.id}
+            ev={ev}
+            result={ev.kind === 'tool_use' && ev.toolUseId ? turn.resultByToolId[ev.toolUseId] : null}
+            open={!!openEvents[ev.id]}
+            onToggle={() => onToggle(ev.id)}
+            now={now}
+            showResult={showResult}
+          />
+        ))}
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Row (single event)
+// ---------------------------------------------------------------------------
+function Row({ ev, result, open, onToggle, now, showResult }) {
+  const { icon, color, label } = eventStyle(ev);
+  const klass = kindClass(ev, result);
+  return (
+    <div className={`log-row ${klass} ${open ? 'open' : ''}`} onClick={onToggle}>
+      <div className="log-row-icon">
+        <div className="dot" style={{ color }}>{icon}</div>
+      </div>
+      <div className="log-row-body">
+        <div className="log-row-head">
+          <I.ChevronRt size={10} className="chev"/>
+          <span className="log-row-kind" style={{ color }}>{label}</span>
+          <span className="log-row-summary">{summaryFor(ev, result)}</span>
+          <span className="log-row-meta">
+            {ev.ts && <TimestampMeta ts={ev.ts} now={now} />}
+          </span>
+        </div>
+        {open && <RowDetail ev={ev} result={result} showResult={showResult} />}
       </div>
     </div>
   );
-};
-
-function eventStyle(ev) {
-  switch (ev.kind) {
-    case "user": return { icon: <I.User size={13}/>, color: "var(--accent)", label: "User" };
-    case "assistant_text": return { icon: <I.MessageSq size={13}/>, color: "var(--text-2)", label: "Assistant" };
-    case "tool_use": return { icon: <I.Wrench size={13}/>, color: "var(--info)", label: "Tool call" };
-    case "tool_result": return { icon: <I.CheckCircle size={13}/>, color: "var(--ok)", label: "Result" };
-    default: return { icon: <I.Dot size={13}/>, color: "var(--text-3)", label: ev.kind };
-  }
 }
 
-function renderBody(ev, collapsed) {
-  if (collapsed) {
-    return <div style={{ color: "var(--text-4)", fontSize: 11, fontStyle: "italic" }}>(collapsed)</div>;
-  }
-  if (ev.kind === "user" || ev.kind === "assistant_text") {
-    return <div style={{ color: ev.kind === "user" ? "var(--text-1)" : "var(--text-2)", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{ev.content}</div>;
-  }
-  if (ev.kind === "tool_use") {
-    return <KVBlock data={ev.input} tint="info"/>;
-  }
-  if (ev.kind === "tool_result") {
-    const exit = ev.result?.exitCode;
-    const data = ev.result ?? ev.content;
+function RowDetail({ ev, result, showResult }) {
+  if (ev.kind === 'user') {
     return (
-      <div>
-        {typeof exit === "number" && (
-          <div style={{ marginBottom: 4 }}>
-            <span className={`badge ${exit === 0 ? "ok" : "err"}`} style={{ fontFamily: "var(--font-mono)" }}>
-              exit {exit}
-            </span>
+      <div className="log-detail">
+        <div className="user-bubble">{ev.content}</div>
+      </div>
+    );
+  }
+  if (ev.kind === 'assistant_text') {
+    const isThinking = !!ev.thinking;
+    return (
+      <div className="log-detail">
+        <div className="detail-section">
+          <div className="detail-header">
+            <span className="label">{isThinking ? 'internal reasoning' : 'assistant'}</span>
+          </div>
+          <div className={"detail-body" + (isThinking ? " serif" : "")}>{ev.content}</div>
+        </div>
+      </div>
+    );
+  }
+  if (ev.kind === 'tool_use') {
+    const r = result;
+    const isErr = !!(r && (r.isError || r.result?.is_error));
+    const dur = r && ev.ts && r.ts ? fmtDur(ev.ts, r.ts) : '';
+    return (
+      <div className="log-detail">
+        <div className="detail-section">
+          <div className="detail-header">
+            <span className="label">{ev.tool || 'tool'} · input</span>
+            {ev.toolUseId && <span style={{ color: "var(--text-4)", fontSize: 10 }}>{ev.toolUseId}</span>}
+          </div>
+          <ToolInput name={ev.tool} input={ev.input} />
+        </div>
+        {showResult && (
+          <div className="detail-section">
+            <div className={"detail-header" + (isErr ? " err" : "")}>
+              <span className="label">
+                {r ? (isErr ? 'error' : 'result') : 'awaiting result'}
+                {dur && <span style={{ color: "var(--text-4)" }}> · {dur}</span>}
+              </span>
+              {r?.content != null && !isErr && typeof r.content === 'string' && (
+                <span style={{ color: "var(--text-4)", fontSize: 10 }}>{r.content.length.toLocaleString()} chars</span>
+              )}
+            </div>
+            <ToolResult name={ev.tool} result={r} />
           </div>
         )}
-        <KVBlock data={data} tint={exit === 0 || exit === undefined ? "ok" : "err"}/>
+      </div>
+    );
+  }
+  if (ev.kind === 'tool_result') {
+    // Unpaired tool_result (rare — toolUseId missing). Render content directly.
+    const isErr = !!(ev.isError || ev.result?.is_error);
+    return (
+      <div className="log-detail">
+        <div className="detail-section">
+          <div className={"detail-header" + (isErr ? " err" : "")}>
+            <span className="label">{isErr ? 'error' : 'result'}</span>
+          </div>
+          <ToolResult name="" result={ev} />
+        </div>
       </div>
     );
   }
   return null;
 }
 
-// Formatted key-value block for JSON-ish tool payloads
-const KVBlock = ({ data, tint = "" }) => {
-  const tintColor = {
-    ok: "rgba(124,196,127,0.35)",
-    err: "rgba(229,128,107,0.35)",
-    info: "rgba(122,167,224,0.3)",
-  }[tint] || "var(--border-2)";
-  if (data == null) return null;
-  const isPlainObject = typeof data === "object" && !Array.isArray(data);
-  const entries = isPlainObject ? Object.entries(data) : null;
-  return (
-    <div style={{
-      background: "var(--bg-2)",
-      border: "1px solid var(--border-1)",
-      borderLeft: `2px solid ${tintColor}`,
-      borderRadius: "var(--r-sm)",
-      padding: "7px 10px",
-      fontFamily: "var(--font-mono)",
-      fontSize: 11,
-      color: "var(--text-2)",
-      overflow: "auto",
-    }}>
-      {entries ? entries.map(([k, v]) => (
-        <div key={k} style={{ display: "flex", gap: 8, padding: "1px 0" }}>
-          <span style={{ color: "var(--text-3)", minWidth: 70 }}>{k}:</span>
-          <span style={{ color: "var(--text-1)", whiteSpace: "pre-wrap", wordBreak: "break-word", flex: 1 }}>
-            {formatValue(v)}
-          </span>
-        </div>
-      )) : (
-        <span style={{ color: "var(--text-1)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-          {formatValue(data)}
-        </span>
-      )}
-    </div>
-  );
-};
+// ---------------------------------------------------------------------------
+// Smart tool input renderers (per design)
+// ---------------------------------------------------------------------------
+function ToolInput({ name, input }) {
+  if (!input) return <div className="detail-body" style={{ color: "var(--text-4)", fontStyle: "italic" }}>(no input)</div>;
+  const n = (name || '').toLowerCase();
 
-function formatValue(v) {
-  if (Array.isArray(v)) return v.join(", ");
-  if (typeof v === "object" && v !== null) return JSON.stringify(v, null, 2);
-  return String(v);
+  if (n === 'bash') {
+    return (
+      <div className="kv">
+        <div className="k">$</div>
+        <div className="v cmd">{input.command}</div>
+        {input.description && (<><div className="k">desc</div><div className="v">{input.description}</div></>)}
+      </div>
+    );
+  }
+  if (n === 'read') {
+    return (
+      <div className="kv">
+        <div className="k">file</div>
+        <div className="v path">{input.file_path}</div>
+        {input.offset != null && (<><div className="k">offset</div><div className="v">{input.offset}</div></>)}
+        {input.limit != null && (<><div className="k">limit</div><div className="v">{input.limit}</div></>)}
+      </div>
+    );
+  }
+  if (n === 'glob') {
+    return (
+      <div className="kv">
+        <div className="k">pattern</div>
+        <div className="v pattern">{input.pattern}</div>
+        {input.path && (<><div className="k">path</div><div className="v path">{input.path}</div></>)}
+      </div>
+    );
+  }
+  if (n === 'grep') {
+    return (
+      <div className="kv">
+        <div className="k">pattern</div>
+        <div className="v pattern">{input.pattern}</div>
+        {input.path && (<><div className="k">path</div><div className="v path">{input.path}</div></>)}
+        {input.output_mode && (<><div className="k">mode</div><div className="v">{input.output_mode}</div></>)}
+      </div>
+    );
+  }
+  if (n === 'write') {
+    return (
+      <div className="kv">
+        <div className="k">file</div>
+        <div className="v path">{input.file_path}</div>
+        {input.content != null && (
+          <>
+            <div className="k">content</div>
+            <div className="v"><LongText content={String(input.content)} max={400} /></div>
+          </>
+        )}
+      </div>
+    );
+  }
+  if (n === 'edit') {
+    return (
+      <div className="kv">
+        <div className="k">file</div>
+        <div className="v path">{input.file_path}</div>
+        {input.old_string != null && (
+          <>
+            <div className="k">old</div>
+            <div className="v"><LongText content={String(input.old_string)} max={300} /></div>
+          </>
+        )}
+        {input.new_string != null && (
+          <>
+            <div className="k">new</div>
+            <div className="v"><LongText content={String(input.new_string)} max={300} /></div>
+          </>
+        )}
+      </div>
+    );
+  }
+  return <pre className="code wrap">{JSON.stringify(input, null, 2)}</pre>;
+}
+
+// ---------------------------------------------------------------------------
+// Smart tool result renderers (per design)
+// ---------------------------------------------------------------------------
+function ToolResult({ name, result }) {
+  if (!result) return <div className="detail-body" style={{ color: "var(--text-4)", fontStyle: "italic" }}>awaiting result…</div>;
+
+  const isErr = !!(result.isError || result.result?.is_error);
+  const content = typeof result.content === 'string'
+    ? result.content
+    : result.content != null ? JSON.stringify(result.content, null, 2) : '';
+
+  if (isErr) return <div className="err-body">{content || 'error'}</div>;
+
+  const n = (name || '').toLowerCase();
+
+  if (n === 'glob' || n === 'ls') {
+    const lines = content.split('\n').filter(Boolean);
+    if (lines.length === 0 || content === 'No files found') {
+      return <div className="filetree"><div className="empty">No files found</div></div>;
+    }
+    return (
+      <div className="filetree">
+        {lines.slice(0, 30).map((l, i) => {
+          const isDir = l.endsWith('/');
+          return (
+            <div key={i} className={"line " + (isDir ? "dir" : "")}>
+              {isDir ? <I.Folder size={12}/> : <I.File size={12}/>}
+              <span className="name">{l}</span>
+            </div>
+          );
+        })}
+        {lines.length > 30 && <div className="more">{lines.length - 30} more…</div>}
+      </div>
+    );
+  }
+
+  if (n === 'bash') {
+    return <pre className="code wrap">{content || <span style={{ color: "var(--text-4)" }}>(no output)</span>}</pre>;
+  }
+
+  if (n === 'grep') {
+    const lines = content.split('\n').filter(Boolean);
+    return (
+      <div className="filetree">
+        {lines.slice(0, 30).map((l, i) => (
+          <div key={i} className="line">
+            <I.File size={12}/>
+            <span className="name" style={{ color: "var(--text-2)" }}>{l}</span>
+          </div>
+        ))}
+        {lines.length > 30 && <div className="more">{lines.length - 30} more matches…</div>}
+      </div>
+    );
+  }
+
+  if (n === 'read') {
+    return <LongText content={content} />;
+  }
+
+  if (n === 'write' || n === 'edit') {
+    return <div className="detail-body" style={{ color: "var(--ok)" }}>✓ {content}</div>;
+  }
+
+  return <LongText content={content} />;
+}
+
+function LongText({ content, max = 800 }) {
+  const [open, setOpen] = React.useState(false);
+  if (!content) return null;
+  const long = content.length > max;
+  const shown = open || !long ? content : content.slice(0, max) + '…';
+  return (
+    <pre className="code wrap">
+      {shown}
+      {long && (
+        <button className="trunc-btn" onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}>
+          {open ? 'show less' : `show all (${content.length.toLocaleString()} chars)`}
+        </button>
+      )}
+    </pre>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Row summary / icon / class / label helpers
+// ---------------------------------------------------------------------------
+function eventStyle(ev) {
+  if (ev.kind === 'user') return { icon: <I.User size={13}/>, color: "var(--info)", label: "User" };
+  if (ev.kind === 'assistant_text') {
+    if (ev.thinking) return { icon: <I.Brain size={13}/>, color: "var(--purple)", label: "Thinking" };
+    return { icon: <I.MessageSq size={13}/>, color: "var(--accent)", label: "Response" };
+  }
+  if (ev.kind === 'tool_use') return { icon: toolIcon(ev.tool), color: "var(--ok)", label: ev.tool || "Tool" };
+  if (ev.kind === 'tool_result') return { icon: <I.CheckCircle size={13}/>, color: "var(--ok)", label: "Result" };
+  return { icon: <I.Dot size={13}/>, color: "var(--text-3)", label: ev.kind };
+}
+
+function toolIcon(name) {
+  const n = (name || '').toLowerCase();
+  if (n.includes('read')) return <I.File size={13}/>;
+  if (n.includes('write') || n.includes('edit')) return <I.FileEdit size={13}/>;
+  if (n.includes('bash') || n.includes('shell')) return <I.Terminal size={13}/>;
+  if (n.includes('glob')) return <I.Folder size={13}/>;
+  if (n.includes('grep') || n.includes('search')) return <I.Search size={13}/>;
+  if (n.includes('web')) return <I.Globe size={13}/>;
+  if (n.includes('todo') || n.includes('list')) return <I.List size={13}/>;
+  return <I.Wrench size={13}/>;
+}
+
+function kindClass(ev, result) {
+  if (ev.kind === 'user') return 'k-user';
+  if (ev.kind === 'assistant_text' && ev.thinking) return 'k-thinking';
+  if (ev.kind === 'assistant_text') return 'k-text';
+  if (ev.kind === 'tool_use') {
+    const isErr = !!(result && (result.isError || result.result?.is_error));
+    return 'k-tool' + (isErr ? ' err' : '');
+  }
+  if (ev.kind === 'tool_result') {
+    const isErr = !!(ev.isError || ev.result?.is_error);
+    return 'k-tool' + (isErr ? ' err' : '');
+  }
+  return '';
+}
+
+function summaryFor(ev, result) {
+  if (ev.kind === 'user') return <>{truncate(ev.content, 180)}</>;
+  if (ev.kind === 'assistant_text' && ev.thinking) {
+    return <em style={{ fontStyle: "italic" }}>{truncate(ev.content, 160)}</em>;
+  }
+  if (ev.kind === 'assistant_text') return <>{truncate(ev.content, 160)}</>;
+  if (ev.kind === 'tool_use') {
+    const input = ev.input || {};
+    const n = (ev.tool || '').toLowerCase();
+    let hint = '';
+    if (n === 'bash') hint = input.command;
+    else if (n === 'read' || n === 'write' || n === 'edit') hint = input.file_path;
+    else if (n === 'glob' || n === 'grep') hint = input.pattern;
+    else hint = Object.values(input)[0];
+    const isErr = !!(result && (result.isError || result.result?.is_error));
+    return (
+      <>
+        <strong>{ev.tool || 'tool'}</strong>
+        {hint && <> · <code>{truncate(String(hint), 80)}</code></>}
+        {isErr && <> · <span style={{ color: "var(--err)" }}>error</span></>}
+      </>
+    );
+  }
+  if (ev.kind === 'tool_result') {
+    const isErr = !!(ev.isError || ev.result?.is_error);
+    return <span style={{ color: isErr ? "var(--err)" : undefined }}>{truncate(typeof ev.content === 'string' ? ev.content : '', 120)}</span>;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Time formatting — relative · date · time
+// ---------------------------------------------------------------------------
+function TimestampMeta({ ts, now }) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return null;
+  const rel = fmtRelative(d.getTime(), now);
+  const date = fmtDate(d);
+  const time = fmtTime(ts);
+  return (
+    <span className="ts-meta" title={d.toISOString()}>
+      <span className="ts-rel">{rel}</span>
+      <span className="ts-sep">·</span>
+      <span className="ts-date">{date}</span>
+      <span className="ts-sep">·</span>
+      <span className="ts-time">{time}</span>
+    </span>
+  );
+}
+
+function fmtTime(ts) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+}
+
+function fmtDate(d) {
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function fmtRelative(then, now) {
+  const diff = Math.max(0, now - then);
+  const s = Math.round(diff / 1000);
+  if (s < 5) return 'just now';
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  return `${d}d ago`;
+}
+
+function fmtDur(a, b) {
+  const ms = new Date(b) - new Date(a);
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(2)}s`;
+  const mins = Math.floor(ms / 60_000);
+  const secs = Math.round((ms % 60_000) / 1000);
+  return `${mins}m ${secs}s`;
+}
+
+function truncate(s, n) {
+  if (s == null) return '';
+  const str = String(s);
+  return str.length > n ? str.slice(0, n) + '…' : str;
 }
 
 export { LogColumn };

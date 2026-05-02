@@ -158,6 +158,7 @@ const ProjectScreen = () => {
   };
 
   // ---- Pane renderers ----
+  const runningCount = TASKS.filter(t => t.status === "running").length;
   const paneRenderers = {
     dag: (dragHandleProps) => (
       <Panel
@@ -165,7 +166,9 @@ const ProjectScreen = () => {
         icon={<I.Layout size={13}/>}
         title="Task DAG"
         count={TASKS.length}
-        badge={<span className="badge accent" style={{ fontSize: 10 }}>running</span>}
+        badge={runningCount > 0
+          ? <span className="badge accent" style={{ fontSize: 10 }}>{runningCount} running</span>
+          : null}
         dragHandleProps={dragHandleProps}
         collapsed={!!paneCollapsed.dag}
         onToggleCollapse={() => togglePane("dag")}
