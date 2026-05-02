@@ -95,9 +95,9 @@ interactions you can verify and end with `status:"done"`. Only emit
 ### B. Project-side UI issues → `round-<N>-issues.md`
 
 For the `exec_ui_check` stage, write a fresh round file at the path
-shown as `round issues file:` in your **Runtime paths** block. This is
+shown as `round issues file:` in your **Workspace** block. This is
 `.flow/tasks/<taskId>/issues/round-<N>-issues.md`, where `<N>` is the
-`ui-review round:` value also in your runtime paths.
+`ui-review round:` value also in the Workspace block.
 
 `code_review_ui_check` skips this step — it does not produce a round
 file. Append observations to `summary.md` instead, since by then the
@@ -164,4 +164,9 @@ Every affected route/screen has been exercised, evidence is saved, the
 round-N issues file is written (header + outcome line at minimum, even
 when zero issues), and any harness gap is filed under `issues/`. The
 scheduler routes exec back automatically if the round file is non-empty —
-do not edit application code yourself.
+do not edit application code yourself. Then:
+
+1. If the round file or any in-worktree artifact was written, `git add -A && git commit -m "<imperative subject ≤72 chars>"`. If nothing in-worktree changed, skip the commit.
+2. Write the stage signal:
+   `echo '{"stage":"<stage>","status":"done"}' > <stage signal path from Workspace>`
+   (substitute the stage — `exec_ui_check` or `code_review_ui_check` — from the Workspace block; use `"status":"blocked","reason":"…"` only if every interaction was unverifiable).

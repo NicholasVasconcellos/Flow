@@ -165,16 +165,22 @@ test("composePrompt references skill via @path and includes task + context files
   // Old framing labels are gone.
   assert.doesNotMatch(prompt, /Title:/);
   assert.doesNotMatch(prompt, /Description:/);
-  assert.match(prompt, /# Runtime paths/);
+  assert.match(prompt, /# Workspace/);
   assert.match(prompt, /progress\.txt:/);
   assert.match(prompt, /stage signal:/);
-  assert.match(prompt, /# Progress notes/);
-  assert.match(prompt, /# Context files/);
+  assert.match(prompt, /# Context\n@/);
   assert.match(prompt, /@src\/a\.ts/);
   assert.match(prompt, /@src\/b\.ts/);
-  assert.match(prompt, /Prior session summaries/);
+  assert.match(prompt, /# Prior session notes/);
   assert.match(prompt, /Prev stage notes/);
-  assert.match(prompt, /# Stage protocol/);
+  // Stage protocol prose moved into per-stage SKILL.md bodies.
+  assert.doesNotMatch(prompt, /# Stage protocol/);
+  // Runtime paths block was renamed to Workspace.
+  assert.doesNotMatch(prompt, /# Runtime paths/);
+  // Progress notes is now folded into the Context section as the first @path.
+  assert.doesNotMatch(prompt, /# Progress notes/);
+  // Learnings block is now lean (3 bullets, no "Learnings draft" header).
+  assert.match(prompt, /# Learnings\n- Append to learnings-draft\.md/);
 });
 
 test("composePrompt omits sections with no content", async () => {
@@ -193,7 +199,7 @@ test("composePrompt omits sections with no content", async () => {
   );
   assert.ok(prompt.startsWith(`@${paths.skillFile("exec")}`));
   assert.doesNotMatch(prompt, /# Task/);
-  assert.doesNotMatch(prompt, /# Context files/);
+  assert.doesNotMatch(prompt, /# Context/);
   assert.doesNotMatch(prompt, /Prior session/);
 });
 
@@ -214,13 +220,14 @@ test("composePrompt throws with skill name when skill file missing", async () =>
   );
 });
 
-test("composePrompt omits commit step for non-committing stages", async () => {
+test("composePrompt does not inline a stage-protocol block (each SKILL.md owns its Done-when)", async () => {
   const root = await mkTmp();
   const paths = new Paths(root);
-  await writeSkill(paths, "merge-resolve", "SKILL BODY");
-  await writeSkill(paths, "update-learning", "SKILL BODY");
+  for (const name of ["merge-resolve", "update-learning", "exec"]) {
+    await writeSkill(paths, name, "SKILL BODY");
+  }
 
-  for (const stage of ["merge-resolve", "update-learning"] as const) {
+  for (const stage of ["merge-resolve", "update-learning", "exec"] as const) {
     const prompt = await composePrompt(
       { paths },
       {
@@ -231,31 +238,20 @@ test("composePrompt omits commit step for non-committing stages", async () => {
       },
     );
 
-    assert.match(prompt, /# Stage protocol/, `${stage} should still get protocol preamble`);
-    assert.doesNotMatch(
-      prompt,
-      /git add -A && git commit/,
-      `${stage} must not include commit instruction`,
-    );
-    assert.match(
-      prompt,
-      /3\. Write the stage signal and stop:/,
-      `${stage} stage-signal step should be renumbered to 3`,
-    );
-    assert.doesNotMatch(
-      prompt,
-      /4\. Write the stage signal/,
-      `${stage} should not have a step 4`,
-    );
+    assert.doesNotMatch(prompt, /# Stage protocol/, `${stage}: protocol block should be gone`);
+    assert.doesNotMatch(prompt, /git add -A && git commit/, `${stage}: commit instruction lives in skill body, not prompt`);
+    assert.doesNotMatch(prompt, /Write the stage signal and stop/, `${stage}: signal-emit text lives in skill body, not prompt`);
   }
 });
 
-test("composePrompt includes commit step for committing stages", async () => {
+test("composePrompt only emits Learnings block for LEARNINGS_DRAFT stages", async () => {
   const root = await mkTmp();
   const paths = new Paths(root);
-  await writeSkill(paths, "exec", "SKILL BODY");
+  for (const name of ["exec", "merge-resolve", "update-learning"]) {
+    await writeSkill(paths, name, "SKILL BODY");
+  }
 
-  const prompt = await composePrompt(
+  const execPrompt = await composePrompt(
     { paths },
     {
       taskId: "T1",
@@ -264,10 +260,29 @@ test("composePrompt includes commit step for committing stages", async () => {
       worktreePath: root,
     },
   );
+  assert.match(execPrompt, /# Learnings\n- Append to learnings-draft\.md/);
 
-  assert.match(prompt, /# Stage protocol/);
-  assert.match(prompt, /git add -A && git commit/);
-  assert.match(prompt, /4\. Write the stage signal and stop:/);
+  const mergePrompt = await composePrompt(
+    { paths },
+    {
+      taskId: "T1",
+      stage: "merge-resolve",
+      skillName: "merge-resolve",
+      worktreePath: root,
+    },
+  );
+  assert.doesNotMatch(mergePrompt, /# Learnings/);
+
+  const learningPrompt = await composePrompt(
+    { paths },
+    {
+      taskId: "T1",
+      stage: "update-learning",
+      skillName: "update-learning",
+      worktreePath: root,
+    },
+  );
+  assert.doesNotMatch(learningPrompt, /# Learnings/);
 });
 
 // ---------------------------------------------------------------------------

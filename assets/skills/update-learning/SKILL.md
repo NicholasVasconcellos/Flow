@@ -18,7 +18,7 @@ budget to think carefully. Your output is what survives long-term.
 
 **You do not commit.** You do not modify application code, tests, configs, or
 task docs. The only writes allowed are to `learnings-draft.md` and to files
-under the **project skills dir** (absolute path in the **Runtime paths**
+under the **project skills dir** (absolute path in the **Workspace**
 block — it lives at the project root's `.flow/skills/`, *outside* the
 worktree). New/edited skill files take effect immediately for subsequent
 tasks; they are not part of this task's PR. The user can later promote any
@@ -27,7 +27,7 @@ project skills.
 
 ## Inputs
 
-Paths are given in the prompt's **Runtime paths** block. Read all that exist
+Paths are given in the prompt's **Workspace** block. Read all that exist
 before writing.
 
 For _this_ task:
@@ -45,7 +45,7 @@ For prior context (read all that exist):
 - All `*.md` under `.flow/learnings/` — distilled learnings from prior
   tasks. Use to spot recurrence and decide what to promote.
 - All `*/SKILL.md` under the **project skills dir** (absolute path in the
-  **Runtime paths** block) — existing project skills, so you can edit one
+  **Workspace** block) — existing project skills, so you can edit one
   rather than create a duplicate.
 
 For skill-format reference (read once if you'll write skills):
@@ -120,7 +120,7 @@ the bar. Zero promotions per task is normal.
 ### Where to write
 
 Write into the **project skills dir** (absolute path given in the
-**Runtime paths** block). Each skill is a directory: `<project skills
+**Workspace** block). Each skill is a directory: `<project skills
 dir>/<topic>/SKILL.md`, with optional `references/*.md` alongside.
 
 Prefer editing an existing skill at `<project skills dir>/<topic>/SKILL.md`
@@ -142,10 +142,18 @@ them as Claude Code project skills separately.
 ## Guardrails
 
 - **No code changes.** Only `learnings-draft.md` and files under the
-  project skills dir (the absolute path is in **Runtime paths**).
+  project skills dir (the absolute path is in **Workspace**).
 - **No git commit.** The orchestrator advances on the stage signal alone.
 - **Don't fabricate.** Every entry and skill must trace to draft, progress,
   summary, diff, prior corpus, or existing skills.
 - **Don't pad.** Empty Part A and zero promotions in Part B are both common
   and correct outcomes.
+
+## Done when
+
+Part A and Part B above are complete (zero entries / zero promotions are valid). Then write the stage signal:
+
+`echo '{"stage":"update-learning","status":"done"}' > <stage signal path from Workspace>`
+
+(use `"status":"blocked","reason":"…"` if you cannot proceed). Do **not** run `git commit`.
 

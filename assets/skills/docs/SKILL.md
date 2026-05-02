@@ -50,4 +50,9 @@ documentation for anything that was deleted.
 
 ## Done when
 
-Documentation reflects what changed in this task and the commit is in place.
+Documentation reflects what changed in this task. Then:
+
+1. `git add -A && git commit -m "<imperative subject ≤72 chars>"` (skip the commit if no docs changed).
+2. Write the stage signal:
+   `echo '{"stage":"documentation","status":"done"}' > <stage signal path from Workspace>`
+   (use `"status":"blocked","reason":"…"` if you cannot proceed).

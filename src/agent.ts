@@ -102,36 +102,6 @@ const STDIO_DRAIN_GRACE_MS = 2_000;
 // Prompt composition (exported for tests)
 // ---------------------------------------------------------------------------
 
-/** Stages where the agent is doing actual work in the task's worktree —
- *  these all get the termination + stage-signal preamble.
- *  Project-level stages (setup, get-tasks) do not commit or signal. */
-const TASK_AGENT_STAGES = new Set<string>([
-  "spec",
-  "exec",
-  "exec_ui_check",
-  "code_review",
-  "code_review_ui_check",
-  "documentation",
-  "update-learning",
-  "merge-resolve",
-  "commit_recovery",
-]);
-
-/** Subset of TASK_AGENT_STAGES that actually authors a commit. The protocol's
- *  "commit your changes" step is included only for these. Stages excluded:
- *  - `merge-resolve` / `update-learning`: skill bodies explicitly forbid commits
- *    (the orchestrator finalizes those).
- *  - `commit_recovery`: the `commit` skill body itself drives `git add -A &&
- *    git commit`, so the protocol step would be redundant. */
-const COMMITTING_STAGES = new Set<string>([
-  "spec",
-  "exec",
-  "exec_ui_check",
-  "code_review",
-  "code_review_ui_check",
-  "documentation",
-]);
-
 /** Stages that produce content for the per-task `learnings-draft.md`.
  *  `update-learning` consolidates the draft (Part A) so it is excluded;
  *  merge-resolve / commit_recovery do not produce learnings. */
@@ -143,13 +113,6 @@ const LEARNINGS_DRAFT_STAGES = new Set<string>([
   "code_review_ui_check",
   "documentation",
 ]);
-
-const THINKING_KEYWORD: Record<ThinkingMode, string> = {
-  off: "",
-  think: "Use the `think` thinking budget for this turn.",
-  megathink: "Use the `megathink` thinking budget for this turn.",
-  ultrathink: "Use the `ultrathink` thinking budget for this turn.",
-};
 
 export class MissingSkillError extends Error {
   readonly skillName: string;
@@ -180,25 +143,6 @@ export async function composePrompt(
   }
   const sections: string[] = [`@${skillPath}`];
 
-  // Optional thinking-budget hint, derived from the resolved effort tier.
-  if (args.thinkingMode && args.thinkingMode !== "off") {
-    const hint = THINKING_KEYWORD[args.thinkingMode];
-    if (hint) sections.push(hint);
-  }
-
-  // Inject project-level `AGENTS.md` for every stage except setup
-  // (which authors the file). Bootstrap-safe: skip silently when the file
-  // doesn't exist yet so a fresh project's first setup run still works.
-  if (args.stage !== "setup") {
-    const agentsPath = deps.paths.agentsMd;
-    try {
-      await fs.access(agentsPath);
-      sections.push(`# Project instructions\n@${agentsPath}`);
-    } catch {
-      /* not created yet — first setup run hasn't completed */
-    }
-  }
-
   const task = args.task;
   if (task) {
     const title = (task.title ?? "").trim();
@@ -208,127 +152,77 @@ export async function composePrompt(
     sections.push(`# Task\n${body}`);
   }
 
-  if (args.taskId && deps.paths) {
+  let progressPath: string | undefined;
+  if (args.taskId) {
     const summaryPath = deps.paths.taskSummary(args.taskId);
     const screenshotsDir = deps.paths.taskScreenshotsDir(args.taskId);
-    const progressPath = deps.paths.taskProgressTxt(args.taskId);
+    progressPath = deps.paths.taskProgressTxt(args.taskId);
     const stageSignalPath = deps.paths.taskStageSignal(args.taskId);
     const learningsDraftPath = deps.paths.taskLearningsDraft(args.taskId);
-    const runtimeLines = [
-      "# Runtime paths",
-      `cwd (worktree):    ${args.worktreePath}`,
-      `summary.md:        ${summaryPath}`,
+    const lines = [
+      "# Workspace",
+      `cwd:               ${args.worktreePath}`,
+      `stage signal:      ${stageSignalPath}`,
       `progress.txt:      ${progressPath}`,
+      `summary.md:        ${summaryPath}`,
       `learnings-draft:   ${learningsDraftPath}`,
       `screenshots:       ${screenshotsDir}`,
-      `stage signal:      ${stageSignalPath}`,
     ];
     if (
-      args.stage === "exec_ui_check" &&
+      (args.stage === "exec_ui_check" ||
+        args.stage === "code_review_ui_check") &&
       typeof args.uiReviewRound === "number"
     ) {
       const roundFile = deps.paths.taskRoundIssues(
         args.taskId,
         args.uiReviewRound,
       );
-      runtimeLines.push(
+      lines.push(
         `round issues file: ${roundFile}`,
         `ui-review round:   ${args.uiReviewRound}`,
       );
     }
-    // update-learning may promote learnings into Flow's project skills
-    // dir at the project root (outside the worktree). Hand it the absolute
-    // path so the agent doesn't try to resolve `.flow/skills/` relative to
-    // the worktree's cwd.
     if (args.stage === "update-learning") {
-      runtimeLines.push(`project skills dir: ${deps.paths.skillsDir}`);
+      lines.push(`project skills dir: ${deps.paths.skillsDir}`);
     }
-    runtimeLines.push(
-      "Edit only files inside cwd (except `learnings-draft.md` and the",
-      "stage signal, which live outside the worktree). Wherever the skill",
-      `mentions \`<taskId>\`, substitute "${args.taskId}".`,
-    );
-    sections.push(runtimeLines.join("\n"));
+    sections.push(lines.join("\n"));
+  }
 
-    // Surface progress.txt as a context file so each stage sees prior notes.
-    sections.push(`# Progress notes\n@${progressPath}`);
+  // Inject project-level `AGENTS.md` for every stage except setup
+  // (which authors the file). Bootstrap-safe: skip silently when the file
+  // doesn't exist yet so a fresh project's first setup run still works.
+  if (args.stage !== "setup") {
+    const agentsPath = deps.paths.agentsMd;
+    try {
+      await fs.access(agentsPath);
+      sections.push(`# Project rules\n@${agentsPath}`);
+    } catch {
+      /* not created yet — first setup run hasn't completed */
+    }
   }
 
   const ctx = args.contextFiles ?? [];
-  if (ctx.length > 0) {
-    const lines = ["# Context files", ...ctx.map((p) => `@${p}`)];
-    sections.push(lines.join("\n"));
+  const ctxLines: string[] = [];
+  if (progressPath) ctxLines.push(`@${progressPath}`);
+  for (const p of ctx) ctxLines.push(`@${p}`);
+  if (ctxLines.length > 0) {
+    sections.push(`# Context\n${ctxLines.join("\n")}`);
   }
 
   const extra = (args.extraPrompt ?? "").trim();
   if (extra) {
-    sections.push(`# Prior session summaries / addendum\n${extra}`);
+    sections.push(`# Prior session notes\n${extra}`);
   }
 
   if (args.taskId && LEARNINGS_DRAFT_STAGES.has(args.stage as string)) {
     sections.push(
       [
-        "# Learnings draft",
-        "After completing the stage, append to `learnings-draft.md` (path in",
-        "the **Runtime paths** block) ONLY IF this session surfaced something",
-        "a future agent on this codebase would benefit from knowing.",
-        "",
-        "Append when:",
-        "- You hit an error or surprising failure a future agent should avoid.",
-        "- You discovered a tool quirk, flag, path, or version constraint that",
-        "  was not documented.",
-        "- You deviated from the obvious approach and the reason isn't visible",
-        "  in the diff.",
-        "- You learned a project invariant or convention not in CLAUDE.md.",
-        "",
-        "Do NOT write:",
-        "- Lists of doc files updated or \"docs updated\" sentences.",
-        "- Restatements of the task description.",
-        "- Anything already visible in the diff or git history.",
-        "- Session logs (progress.txt and summary.md handle those).",
-        "",
-        "An empty draft is the correct outcome when nothing surprising came up.",
-        "",
-        "Format each entry as:",
-        "    ## <tool or topic>",
-        "    - <one-sentence lesson title>: <2-3 sentence explanation: what,",
-        "      when, why, and what to do differently>",
+        "# Learnings",
+        "- Append to learnings-draft.md only for non-obvious gotchas the next agent could trip on.",
+        "- Format: `## <topic>` then `- <one-sentence lesson>: <one-sentence why/how>`.",
+        "- Don't pad: skip well-known practices, framework-documented behavior, project-specific decisions.",
       ].join("\n"),
     );
-  }
-
-  if (args.taskId && TASK_AGENT_STAGES.has(args.stage as string)) {
-    const stageSignalPath = deps.paths.taskStageSignal(args.taskId);
-    const progressPath = deps.paths.taskProgressTxt(args.taskId);
-    const isCommitting = COMMITTING_STAGES.has(args.stage as string);
-    const lines: string[] = [
-      "# Stage protocol",
-      "1. Read `progress.txt` first; append any meaningful context or extremely concise progress notes.",
-      "2. Do exactly the work this stage's skill requires — no adjacent cleanup.",
-    ];
-    if (isCommitting) {
-      lines.push(
-        "3. When the acceptance checks for this stage pass, commit your changes:",
-        '   `git add -A && git commit -m "<imperative subject ≤72 chars>"`.',
-        "   Body bullets describing each meaningful change are encouraged.",
-        "   Untracked files alone don't block the stage, but still `git add -A && git commit` to capture any legitimate new tracked work.",
-      );
-    }
-    const signalStepNum = isCommitting ? 4 : 3;
-    lines.push(
-      `${signalStepNum}. Write the stage signal and stop:`,
-      `   echo '{"stage":"${args.stage}","status":"done"}' > ${stageSignalPath}`,
-      '   (use `"status":"blocked","reason":"…"` instead if you cannot proceed).',
-      `   progress.txt: ${progressPath}`,
-      "",
-      "If you complete the stage but want a human to audit a specific",
-      "decision before it ships, emit a single line on stdout in addition",
-      "to the stage signal:",
-      "   `FLOW_REVIEW_REQUESTED: <one-sentence reason>`",
-      "This surfaces a warn-level notification without halting the queue.",
-      "Reserve `FLOW_BLOCKED:` for cases where you cannot proceed at all.",
-    );
-    sections.push(lines.join("\n"));
   }
 
   return sections.join("\n\n");

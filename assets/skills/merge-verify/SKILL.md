@@ -22,7 +22,8 @@ checkout — the merge is already committed.
 - `git show <sha>` — the full diff.
 - The task title and description (in the `# Task` block above) — what
   this task was supposed to deliver.
-- `progress.txt` (in `# Progress notes` above) — per-stage notes the
+- `progress.txt` (referenced as `@<path>` under `# Context` above, with
+  the absolute path in the Workspace block) — per-stage notes the
   agents left behind. Pay attention to anything one stage promised that
   the merge diff doesn't reflect.
 

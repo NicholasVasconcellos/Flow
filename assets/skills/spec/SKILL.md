@@ -75,4 +75,9 @@ Report: list each test file created and confirm the failure mode is "implementat
 
 Every acceptance criterion has a test, the test files are in place, and
 those tests fail with "implementation missing" rather than syntax/import
-errors.
+errors. Then:
+
+1. `git add -A && git commit -m "<imperative subject ≤72 chars>"` to capture the new tests.
+2. Write the stage signal:
+   `echo '{"stage":"spec","status":"done"}' > <stage signal path from Workspace>`
+   (use `"status":"blocked","reason":"…"` if you cannot proceed).

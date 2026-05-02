@@ -122,6 +122,18 @@ Include:
    - "Before using any library, consult `docs/<lib>/`."
 4. **Project-specific gotchas** declared in the plan (env-var gotchas,
    hidden invariants, naming conventions specific to this codebase).
+5. **Flow runtime rules** — append the following block verbatim:
+
+   ```
+   ## Flow runtime rules
+
+   - Edit only files inside cwd. Exceptions: `learnings-draft.md` and the stage signal live outside the worktree.
+   - Wherever a skill mentions `<taskId>`, substitute the actual task id from the Workspace block.
+   - Each stage's SKILL.md owns its Done-when steps (commit, signal emit, escape hatches). Follow them exactly.
+   - Halt: emit `FLOW_BLOCKED: <reason>` on stdout to stop the queue.
+   - Warn: emit `FLOW_REVIEW_REQUESTED: <reason>` on stdout to flag without stopping.
+   - Stage signal format: `{"stage":"<stage>","status":"done"}` written to the `stage signal` path.
+   ```
 
 Keep the whole file short — every agent loads it on every spawn.
 

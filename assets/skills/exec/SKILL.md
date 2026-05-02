@@ -104,5 +104,9 @@ If browser tests reveal a bug, fix the implementation and re-run both unit and b
 
 ## Done when
 
-All tests for this task pass (unit, plus browser/UI if applicable) and the
-implementation is committed.
+All tests for this task pass (unit, plus browser/UI if applicable). Then:
+
+1. `git add -A && git commit -m "<imperative subject ≤72 chars>"` (body bullets per meaningful change encouraged).
+2. Write the stage signal:
+   `echo '{"stage":"<stage>","status":"done"}' > <stage signal path from Workspace>`
+   (substitute the stage from the Workspace block; use `"status":"blocked","reason":"…"` if you cannot proceed).

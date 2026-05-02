@@ -83,4 +83,9 @@ Output a plain-text report with these sections:
 
 ## Done when
 
-The review report's status is PASSED and any cleanup commits are in place.
+The review report's status is PASSED. Then:
+
+1. If any cleanup edits were made, `git add -A && git commit -m "<imperative subject ≤72 chars>"`. If nothing changed, skip the commit.
+2. Write the stage signal:
+   `echo '{"stage":"code_review","status":"done"}' > <stage signal path from Workspace>`
+   (use `"status":"blocked","reason":"…"` if you cannot proceed).
