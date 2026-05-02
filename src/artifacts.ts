@@ -100,7 +100,7 @@ export class ProjectArtifacts {
       }
 
       case "project.instructions": {
-        const body = await readFileOrNull(this.paths.instructionsMd);
+        const body = await readFileOrNull(this.paths.agentsMd);
         if (body !== null) yield { kind, ids: {}, payload: { body } };
         return;
       }

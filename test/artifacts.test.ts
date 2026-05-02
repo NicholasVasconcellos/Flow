@@ -59,7 +59,7 @@ test("ProjectArtifacts.fetch — text-body kinds (setup-notes/instructions/plan-
   await scaffoldFlowDir(paths, ASSETS_DIR);
 
   await fsp.writeFile(paths.setupNotes, "setup body\n", "utf8");
-  await fsp.writeFile(paths.instructionsMd, "instructions body\n", "utf8");
+  await fsp.writeFile(paths.agentsMd, "instructions body\n", "utf8");
   await fsp.writeFile(paths.planMd, "plan body\n", "utf8");
 
   const taskId = "task-step6";

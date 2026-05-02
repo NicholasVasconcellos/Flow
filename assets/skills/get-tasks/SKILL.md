@@ -20,7 +20,7 @@ depend on it (tasks that would otherwise have empty `requires` list
   "id": "verify-pipeline-end-to-end",
   "title": "Verify UI-check pipeline end-to-end against SetupNotes",
   "description": "Read .flow/SetupNotes.md. For every tool, library, and service listed, exercise it end-to-end with realistic sample data and capture observable evidence under .flow/tasks/<taskId>/screenshots/. Acceptance: every entry runs against a real surface with passing evidence; failures logged to issues/ as harness gaps.",
-  "contextFiles": [".flow/SetupNotes.md", "instructions.md", "Map.md"],
+  "contextFiles": [".flow/SetupNotes.md", "AGENTS.md", "Map.md"],
   "requires": [],
   "hasUI": true,
   "hasSpec": false,
@@ -34,7 +34,7 @@ Read all provided inputs before doing anything else:
 
 - `plan.md` — the project's plan or PRD
 - `Map.md` — the project map (already current; mirrors the filesystem)
-- `instructions.md` — coding conventions and library-purpose summary
+- `AGENTS.md` — coding conventions and library-purpose summary
 - `docs/<lib>/...` — library documentation fetched during setup
 - `.flow/SetupNotes.md` — installed tools, services, libraries, and skill paths
 

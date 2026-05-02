@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Prepare a project bed — install / configure declared tools, fetch library docs, write `.env`, `.gitignore`, `Map.md`, `instructions.md`, and `.flow/SetupNotes.md`. No runtime tool testing.
+description: Prepare a project bed — install / configure declared tools, fetch library docs, write `.env`, `.gitignore`, `Map.md`, `AGENTS.md`, and `.flow/SetupNotes.md`. No runtime tool testing.
 disable-model-invocation: true
 ---
 
@@ -103,9 +103,9 @@ Skip `.git/`, `node_modules/`, `dist/`, `.flow/`, and other ignored
 directories. Top-level only at first; sub-trees that don't yet exist
 get added by later sessions when they appear.
 
-## Step 6 — Write `instructions.md`
+## Step 6 — Write `AGENTS.md`
 
-Create `<projectRoot>/instructions.md`. **Lean.** Only what every agent
+Create `<projectRoot>/AGENTS.md`. **Lean.** Only what every agent
 needs to know — no architecture essays, no per-module deep-dives.
 
 Include:
@@ -141,7 +141,7 @@ these sections:
 ## Allowed write paths
 
 - `Map.md`
-- `instructions.md`
+- `AGENTS.md`
 - `docs/...`
 - `.gitignore`
 - `.env`
@@ -162,7 +162,7 @@ these sections:
 
 ## Done when
 
-`Map.md`, `instructions.md`, `.gitignore`, `.env`, and
+`Map.md`, `AGENTS.md`, `.gitignore`, `.env`, and
 `.flow/SetupNotes.md` exist, `docs/<lib>/` is populated for every
 declared library, and every declared MCP/plugin/skill/CLI is installed
 or has its install command recorded in SetupNotes. Reserve

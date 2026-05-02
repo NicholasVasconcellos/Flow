@@ -94,7 +94,8 @@ export async function scaffoldFlowDir(
   await ensureDir(paths.worktreesDir);
   await ensureDir(paths.learningsDir);
 
-  // Copy skills. Skip files that already exist so user edits survive.
+  // Copy bundled skills. Files are byte-compared and only refreshed if
+  // they differ — see `copySkillsTree`.
   const srcSkills = path.join(assetsDir, "skills");
   try {
     await fs.access(srcSkills);
@@ -121,24 +122,29 @@ export async function scaffoldFlowDir(
 }
 
 /**
- * Add any bundled skill subdirectories that are not yet present in
- * `.flow/skills/`, and copy any bundled files inside existing skill
- * subdirectories that are missing locally. Never overwrites user-edited
- * files. Returns the list of top-level skill subdirectories that did not
- * exist before this call.
+ * Keep the bundled (core) skills shipped under `assets/skills/` in sync
+ * with `.flow/skills/`:
  *
- * Safe to invoke on every non-read-only Flow command — idempotent and
- * preserves user customisations.
+ * - Adds any bundled skill subdirectory missing locally.
+ * - Within bundled subdirectories, refreshes files whose on-disk bytes
+ *   differ from the bundled copy.
+ *
+ * Skills that exist only in `.flow/skills/` (project-added, e.g.
+ * `pokemon-data-conventions`) are left alone — the loop iterates the
+ * bundled source, never the destination. Returns the lists of skill
+ * directories that were added or had at least one file refreshed.
+ *
+ * Safe to invoke on every non-read-only Flow command — idempotent.
  */
 export async function syncBundledSkills(
   paths: Paths,
   assetsDir: string,
-): Promise<{ added: string[] }> {
+): Promise<{ added: string[]; updated: string[] }> {
   const srcSkills = path.join(assetsDir, "skills");
   try {
     await fs.access(srcSkills);
   } catch {
-    return { added: [] };
+    return { added: [], updated: [] };
   }
   await ensureDir(paths.skillsDir);
   const [srcEntries, destEntries] = await Promise.all([
@@ -152,26 +158,53 @@ export async function syncBundledSkills(
     .filter((e) => e.isDirectory() && !destNames.has(e.name))
     .map((e) => e.name)
     .sort();
-  await copySkillsTree(srcSkills, paths.skillsDir);
-  return { added };
+  const updatedSet = new Set<string>();
+  for (const entry of srcEntries) {
+    if (!entry.isDirectory()) continue;
+    const srcPath = path.join(srcSkills, entry.name);
+    const destPath = path.join(paths.skillsDir, entry.name);
+    const existedLocally = destNames.has(entry.name);
+    const refreshed = await copySkillsTree(srcPath, destPath);
+    // Only count as "updated" if the directory already existed locally;
+    // brand-new directories show up under `added` instead.
+    if (refreshed && existedLocally) updatedSet.add(entry.name);
+  }
+  const updated = [...updatedSet].sort();
+  return { added, updated };
 }
 
-async function copySkillsTree(src: string, dest: string): Promise<void> {
+/**
+ * Recursively copy `src` into `dest`. Files that already exist at the
+ * destination are byte-compared and overwritten only when the bundled
+ * content differs. Returns `true` if any file was written (added or
+ * refreshed); the caller uses this to decide whether to surface the
+ * directory in the `updated` list.
+ */
+async function copySkillsTree(src: string, dest: string): Promise<boolean> {
+  await ensureDir(dest);
   const entries = await fs.readdir(src, { withFileTypes: true });
+  let changed = false;
   for (const entry of entries) {
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
-      await ensureDir(destPath);
-      await copySkillsTree(srcPath, destPath);
+      const sub = await copySkillsTree(srcPath, destPath);
+      if (sub) changed = true;
       continue;
     }
     if (!entry.isFile()) continue;
-    // Preserve user-edited files: never overwrite.
-    if (await exists(destPath)) continue;
+    if (await exists(destPath)) {
+      const [a, b] = await Promise.all([
+        fs.readFile(srcPath),
+        fs.readFile(destPath),
+      ]);
+      if (a.equals(b)) continue;
+    }
     await ensureDir(path.dirname(destPath));
     await fs.copyFile(srcPath, destPath);
+    changed = true;
   }
+  return changed;
 }
 
 // ---------------------------------------------------------------------------

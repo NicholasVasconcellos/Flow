@@ -112,9 +112,9 @@ export class Paths {
     return path.join(this.flowDir, "SetupNotes.md");
   }
 
-  /** Project-level instructions injected into every non-setup session. */
-  get instructionsMd(): string {
-    return path.join(this.projectRoot, "instructions.md");
+  /** Project-level agent guidance injected into every non-setup session. */
+  get agentsMd(): string {
+    return path.join(this.projectRoot, "AGENTS.md");
   }
 
   /** Captures stdout+stderr of the pre-merge verify command for the task.

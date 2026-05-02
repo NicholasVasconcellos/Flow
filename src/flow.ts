@@ -650,6 +650,12 @@ export async function createFlow(
         `Synced ${sync.added.length} bundled skill(s) into .flow/skills: ${sync.added.join(", ")}`,
       );
     }
+    if (sync.updated.length > 0) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `Refreshed ${sync.updated.length} bundled skill(s) in .flow/skills: ${sync.updated.join(", ")}`,
+      );
+    }
   }
 
   // Clear out any tasks left `status=running` by a previous orchestrator

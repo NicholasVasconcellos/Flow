@@ -186,13 +186,21 @@ test("scaffoldFlowDir: copies skills, writes default config, idempotent", async 
     assert.ok(body.length > 0, `skill ${name} has content`);
   }
 
-  // Idempotent: user edits survive a second scaffold.
+  // Core skills self-heal: edits to bundled skill files are overwritten
+  // back to bundled content on the next scaffold. User-added skills
+  // (directories not present in the bundle) are preserved. config.json
+  // is untouched once it exists.
+  const bundledExec = await fs.readFile(paths.skillFile("exec"), "utf8");
   await fs.writeFile(paths.skillFile("exec"), "MY CUSTOM SKILL\n", "utf8");
+  await fs.mkdir(path.dirname(paths.skillFile("project-only")), { recursive: true });
+  await fs.writeFile(paths.skillFile("project-only"), "PROJECT-ONLY SKILL\n", "utf8");
   await fs.writeFile(paths.configJson, '{"custom":true}', "utf8");
   await scaffoldFlowDir(paths, ASSETS_DIR);
 
   const execAfter = await fs.readFile(paths.skillFile("exec"), "utf8");
-  assert.equal(execAfter, "MY CUSTOM SKILL\n");
+  assert.equal(execAfter, bundledExec);
+  const projectOnlyAfter = await fs.readFile(paths.skillFile("project-only"), "utf8");
+  assert.equal(projectOnlyAfter, "PROJECT-ONLY SKILL\n");
   const cfgAfter = await fs.readFile(paths.configJson, "utf8");
   assert.equal(cfgAfter, '{"custom":true}');
 });

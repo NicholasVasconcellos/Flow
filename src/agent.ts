@@ -186,14 +186,14 @@ export async function composePrompt(
     if (hint) sections.push(hint);
   }
 
-  // Inject project-level `instructions.md` for every stage except setup
+  // Inject project-level `AGENTS.md` for every stage except setup
   // (which authors the file). Bootstrap-safe: skip silently when the file
   // doesn't exist yet so a fresh project's first setup run still works.
   if (args.stage !== "setup") {
-    const instructionsPath = deps.paths.instructionsMd;
+    const agentsPath = deps.paths.agentsMd;
     try {
-      await fs.access(instructionsPath);
-      sections.push(`# Project instructions\n@${instructionsPath}`);
+      await fs.access(agentsPath);
+      sections.push(`# Project instructions\n@${agentsPath}`);
     } catch {
       /* not created yet — first setup run hasn't completed */
     }
