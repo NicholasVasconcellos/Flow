@@ -64,6 +64,11 @@ export async function startWsServer(opts: WsServerOpts): Promise<WsServer> {
     ),
   );
   offs.push(
+    bus.on("notifications.cleared", () =>
+      broadcast({ type: "notifications.cleared" }),
+    ),
+  );
+  offs.push(
     bus.on("learning", ({ taskId, path, markdown }) =>
       broadcast({ type: "learning", taskId, path, markdown }),
     ),
@@ -252,6 +257,7 @@ async function handleCommand(
     "task.resume",
     "task.cancel",
     "notification.ack",
+    "notification.clearAll",
     "config.update",
     "config.stages.update",
   ]);
@@ -372,6 +378,10 @@ async function handleCommand(
       // --- notifications ---------------------------------------------------
       case "notification.ack": {
         await flow.ackNotification(cmd.id);
+        return;
+      }
+      case "notification.clearAll": {
+        await flow.clearNotifications();
         return;
       }
 

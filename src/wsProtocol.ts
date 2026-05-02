@@ -83,6 +83,10 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
     requestId: z.string().optional(),
   }),
   z.object({
+    type: z.literal("notification.clearAll"),
+    requestId: z.string().optional(),
+  }),
+  z.object({
     type: z.literal("config.get"),
     requestId: z.string().optional(),
   }),
@@ -130,6 +134,7 @@ export type ServerEvent =
   | { type: "session.event"; event: SessionEvent }
   | { type: "session.ended"; session: Session }
   | { type: "notification"; notification: Notification }
+  | { type: "notifications.cleared" }
   | { type: "learning"; taskId: string; path: string; markdown: string }
   | { type: "config"; config: Config }
   | { type: "config.stages"; stages: Partial<Record<StageKey, StageOverride>> }

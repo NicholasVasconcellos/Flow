@@ -78,6 +78,7 @@ export interface Flow {
   getArtifacts(): ProjectArtifacts;
   listNotifications(): Promise<Notification[]>;
   ackNotification(id: string): Promise<void>;
+  clearNotifications(): Promise<void>;
   /** True when the Flow was constructed in read-only mode (e.g. by `flow
    *  serve`). Mutating WS commands should reject when this is set; the
    *  driving orchestrator runs as a sibling process. */
@@ -370,6 +371,11 @@ class FlowImpl implements Flow {
 
   async ackNotification(id: string): Promise<void> {
     await this.state.ackNotification(id);
+  }
+
+  async clearNotifications(): Promise<void> {
+    await this.state.clearNotifications();
+    this.eventBus.emit("notifications.cleared", {});
   }
 }
 

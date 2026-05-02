@@ -166,12 +166,34 @@ const LearningsPanel = () => {
 };
 
 const NotificationsPanel = () => {
-  const { NOTIFICATIONS, NOTIFICATIONS_TRUNCATED, TASKS } = useFlowData();
+  const { NOTIFICATIONS, NOTIFICATIONS_TRUNCATED, TASKS, sendCommand } = useFlowData();
   const [loadOlder, setLoadOlder] = React.useState(false);
+  const [confirming, setConfirming] = React.useState(false);
+  const onClearAll = React.useCallback(() => {
+    sendCommand({ type: 'notification.clearAll' });
+    setConfirming(false);
+  }, [sendCommand]);
   // Mounting LoadOlderTrigger fires the artifact.fetch via useArtifact at render
   // time (declarative). The button just toggles the trigger into the tree.
   return (
     <div style={{ padding: "8px 10px" }}>
+      {NOTIFICATIONS.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 11, color: "var(--text-3)" }}>
+            {NOTIFICATIONS.length} {NOTIFICATIONS.length === 1 ? "notification" : "notifications"}
+          </span>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+            {confirming ? (
+              <>
+                <button className="btn sm" onClick={() => setConfirming(false)}>Cancel</button>
+                <button className="btn sm primary" onClick={onClearAll}>Confirm clear</button>
+              </>
+            ) : (
+              <button className="btn sm" onClick={() => setConfirming(true)}>Clear all</button>
+            )}
+          </div>
+        </div>
+      )}
       {NOTIFICATIONS.length === 0 && (
         <div style={{ padding: 20, textAlign: "center", color: "var(--text-4)", fontSize: 12 }}>
           No notifications — all sessions running smoothly.

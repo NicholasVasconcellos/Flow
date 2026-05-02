@@ -77,6 +77,7 @@ interface FakeFlowState {
   lastUpdatedPatch?: unknown;
   stopped: boolean;
   ackCalls: string[];
+  clearAllCalls: number;
   runOnceCalls: number;
   runAllOnceCalls: Array<{ limit?: number } | undefined>;
   retryCalls: string[];
@@ -92,6 +93,7 @@ function makeFakeFlow(): { flow: Flow; ctx: FakeFlowState } {
     bus,
     stopped: false,
     ackCalls: [],
+    clearAllCalls: 0,
     runOnceCalls: 0,
     runAllOnceCalls: [],
     retryCalls: [],
@@ -183,6 +185,10 @@ function makeFakeFlow(): { flow: Flow; ctx: FakeFlowState } {
     },
     async ackNotification(id) {
       ctx.ackCalls.push(id);
+    },
+    async clearNotifications() {
+      ctx.clearAllCalls += 1;
+      bus.emit("notifications.cleared", {});
     },
     isReadOnly() {
       return false;
@@ -565,6 +571,25 @@ test("notification.ack forwards to flow.ackNotification", async () => {
         await new Promise((r) => setTimeout(r, 10));
       }
       assert.deepEqual(ctx.ackCalls, ["N1"]);
+    } finally {
+      await c.close();
+    }
+  } finally {
+    await server.close();
+  }
+});
+
+test("notification.clearAll forwards to flow.clearNotifications and broadcasts notifications.cleared", async () => {
+  const { flow, ctx } = makeFakeFlow();
+  const server = await startWsServer({ flow, port: 0, version: "0.1.0" });
+  try {
+    const c = await connect(server.port);
+    try {
+      await c.waitFor((m) => m.type === "config");
+      c.send({ type: "notification.clearAll" });
+      const cleared = await c.waitFor((m) => m.type === "notifications.cleared");
+      assert.equal(cleared.type, "notifications.cleared");
+      assert.equal(ctx.clearAllCalls, 1);
     } finally {
       await c.close();
     }

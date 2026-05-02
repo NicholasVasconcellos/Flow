@@ -522,6 +522,7 @@ export interface Events {
   "session.event": { event: SessionEvent };
   "session.ended": { session: Session };
   notification: { notification: Notification };
+  "notifications.cleared": Record<string, never>;
   learning: { taskId: string; path: string; markdown: string };
   config: { config: Config };
   error: { requestId?: string; message: string };

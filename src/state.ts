@@ -250,6 +250,19 @@ export class StateStore {
     await appendJsonl(this.paths.notificationsJsonl, updated);
     return updated;
   }
+
+  /** Truncate the notifications JSONL on disk. The append-only log is the
+   *  source of truth; with no surviving lines, `listNotifications()` and any
+   *  subsequent cold-load reflect an empty list. No-op when the file is
+   *  already absent. */
+  async clearNotifications(): Promise<void> {
+    try {
+      await fs.writeFile(this.paths.notificationsJsonl, "", "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw err;
+    }
+  }
 }
 
 function arraysEqual(a: readonly string[], b: readonly string[]): boolean {

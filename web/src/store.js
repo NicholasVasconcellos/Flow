@@ -713,6 +713,11 @@ export function applyEvent(state, frame) {
     }
 
     // -----------------------------------------------------------------------
+    case 'notifications.cleared': {
+      return { ...state, NOTIFICATIONS: [], NOTIFICATIONS_TRUNCATED: false };
+    }
+
+    // -----------------------------------------------------------------------
     case 'learning': {
       const { taskId, path, markdown } = frame;
       const parsed = parseLearning(markdown);
