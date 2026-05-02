@@ -2,14 +2,6 @@
 
 Automated workflow orchestrator. Drives multi-stage agent pipelines (spec → exec → review → commit → merge-resolve → docs) across task worktrees. Harness under test when run against downstream projects (e.g. `pkmn-t8`).
 
-## Subagents
-
-Use subagents for parallel tasks or to save context.
-
-## Output
-
-Extremely concise, plain language. Sacrifice grammar for concision.
-
 ## Reading codebase
 
 Check `map.md` first — file index and summaries.
@@ -60,3 +52,21 @@ Scope: things that would surprise a competent reader. Not best practices, not fr
 ## Plans
 
 Extremely concise. Sacrifice grammar for concision. End with a list of unresolved questions, if any.
+
+## skills
+
+skill use is reccomended
+
+## Subagents
+
+Use subagents for parallel tasks or to save context.
+
+## Output
+
+All output is extremely concise, plain language. Sacrifice grammar for concision.
+
+## Explanations
+
+Explain in a clear logical flow where every point follows naturally from the one before it.
+
+if explanining code. Use a bullet list with nested bullets for explaining code step by step.
