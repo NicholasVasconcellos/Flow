@@ -736,6 +736,33 @@ test("readOnly mode rejects mutating commands with command.result {ok:false}", a
   }
 });
 
+test("notification.clearAll is allowed in read-only mode", async () => {
+  const { flow, ctx } = makeFakeFlow();
+  (flow as { isReadOnly: () => boolean }).isReadOnly = () => true;
+  const server = await startWsServer({ flow, port: 0, version: "0.1.0" });
+  try {
+    const c = await connect(server.port);
+    try {
+      await c.waitFor((m) => m.type === "config");
+      c.send({ type: "notification.clearAll", requestId: "rc-ok" });
+      const msg = await c.waitFor(
+        (m) =>
+          m.type === "command.result" &&
+          (m as { requestId: string }).requestId === "rc-ok",
+      );
+      const result = msg as { ok: boolean };
+      assert.equal(result.ok, true);
+      assert.equal(ctx.clearAllCalls, 1);
+      const cleared = await c.waitFor((m) => m.type === "notifications.cleared");
+      assert.equal(cleared.type, "notifications.cleared");
+    } finally {
+      await c.close();
+    }
+  } finally {
+    await server.close();
+  }
+});
+
 test("hello frame advertises capabilities in read-only mode", async () => {
   const { flow } = makeFakeFlow();
   (flow as { isReadOnly: () => boolean }).isReadOnly = () => true;

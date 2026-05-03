@@ -50,6 +50,7 @@ export function isCommandAllowed(cmdType, server) {
       'artifact.fetch',
       'config.get',
       'config.stages.get',
+      'notification.clearAll',
     ]);
     return READ_ONLY_OK.has(cmdType);
   }

@@ -283,6 +283,9 @@ async function handleCommand(
     }
   };
 
+  // notification.clearAll is intentionally absent: clearing notifications is UI
+  // state (truncates .flow/notifications.jsonl + broadcasts notifications.cleared),
+  // not scheduler state — Flow.clearNotifications skips guardWritable.
   const MUTATING_COMMANDS = new Set([
     "run.once",
     "run.allOnce",
@@ -292,7 +295,6 @@ async function handleCommand(
     "task.resume",
     "task.cancel",
     "notification.ack",
-    "notification.clearAll",
     "config.update",
     "config.stages.update",
   ]);
