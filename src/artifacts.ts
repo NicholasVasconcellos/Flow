@@ -263,7 +263,17 @@ export class ProjectArtifacts {
 
     const p = await pickPath();
     if (!p) return;
-    const fallbackTs = new Date().toISOString();
+    // Legacy JSONL persisted only the raw Claude payload (no ts). For those
+    // files, anchor fallback timestamps to the file mtime — the last write
+    // approximates when the session ended. Live envelopes carry their own ts
+    // and are returned verbatim by toSessionEvent, so this only affects legacy.
+    let fallbackTs: string;
+    try {
+      const stat = await fs.stat(p);
+      fallbackTs = stat.mtime.toISOString();
+    } catch {
+      fallbackTs = new Date().toISOString();
+    }
     for await (const raw of readJsonlLines<unknown>(p)) {
       const event = toSessionEvent(raw, sessionId, fallbackTs);
       if (event) yield event;

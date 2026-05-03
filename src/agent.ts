@@ -1022,13 +1022,6 @@ export class AgentRunner {
           continue;
         }
 
-        // Persist the raw line first so on-disk truth survives any downstream error.
-        try {
-          await appendJsonl(jsonlPath, payload);
-        } catch {
-          /* ignore disk errors — don't tear down the session */
-        }
-
         const kind = mapPayloadToEventKind(payload);
         const ts = extractTimestamp(payload, this.nowFn().toISOString());
         const event: SessionEvent = {
@@ -1037,6 +1030,15 @@ export class AgentRunner {
           kind,
           payload,
         };
+
+        // Persist the envelope (with ts/kind/sessionId) so replay reconstructs
+        // real execution times instead of falling back to load time.
+        try {
+          await appendJsonl(jsonlPath, event);
+        } catch {
+          /* ignore disk errors — don't tear down the session */
+        }
+
         this.eventBus.emit("session.event", { event });
 
         const payloadObj =

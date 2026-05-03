@@ -199,3 +199,42 @@ test("ProjectArtifacts.fetch — project.notifications + project.learnings full 
     assert.ok(l.markdown.length > 0);
   }
 });
+
+test("session.events — envelope lines preserve their ts; legacy raw lines fall back to file mtime", { timeout: 5000 }, async () => {
+  const root = await mkTmp();
+  const paths = new Paths(root);
+  await scaffoldFlowDir(paths, ASSETS_DIR);
+
+  const sessionId = "session-ts-fallback";
+  const filePath = paths.projectSessionJsonl(sessionId);
+  await fsp.mkdir(path.dirname(filePath), { recursive: true });
+
+  // Line 1: legacy raw payload (no top-level ts) — should pick up mtime.
+  // Line 2: new-style envelope with explicit ts — should be returned verbatim.
+  const envelopeTs = "2026-01-15T10:30:00.000Z";
+  const lines = [
+    JSON.stringify({ type: "system", session_id: "x", uuid: "u1" }),
+    JSON.stringify({
+      sessionId,
+      ts: envelopeTs,
+      kind: "assistant",
+      payload: { type: "assistant", uuid: "u2" },
+    }),
+  ];
+  await fsp.writeFile(filePath, lines.join("\n") + "\n", "utf8");
+
+  // Pin the file mtime so the fallback is deterministic.
+  const mtime = new Date("2026-02-20T08:00:00.000Z");
+  await fsp.utimes(filePath, mtime, mtime);
+
+  const state = new StateStore(paths);
+  await state.load();
+  const artifacts = new ProjectArtifacts(paths, state);
+
+  const chunks = await collect(artifacts.fetch("session.events", { sessionId }));
+  assert.equal(chunks.length, 2);
+  const e0 = chunks[0]!.payload as { ts: string };
+  const e1 = chunks[1]!.payload as { ts: string };
+  assert.equal(e0.ts, mtime.toISOString(), "legacy line uses file mtime");
+  assert.equal(e1.ts, envelopeTs, "envelope line preserves its ts");
+});
