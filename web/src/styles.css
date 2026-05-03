@@ -24,6 +24,8 @@
   --accent: #d97757;      /* Claude orange */
   --accent-soft: #c96a4c;
   --accent-bg: #2a1d17;
+  --accent-muted: #a8867a;     /* Desaturated accent for Response — keep red distinct */
+  --accent-muted-bg: #1d1815;
 
   /* Status */
   --ok: #7cc47f;
@@ -487,7 +489,7 @@ kbd {
 .log-row.k-thinking .dot  { border-color: rgba(183,136,224,0.40); color: var(--purple); background: var(--purple-bg); }
 .log-row.k-tool .dot      { border-color: rgba(124,196,127,0.40); color: var(--ok); background: var(--ok-bg); }
 .log-row.k-tool.err .dot  { border-color: rgba(229,128,107,0.45); color: var(--err); background: var(--err-bg); }
-.log-row.k-text .dot      { border-color: rgba(217,119,87,0.40); color: var(--accent); background: var(--accent-bg); }
+.log-row.k-text .dot      { border-color: rgba(168,134,122,0.40); color: var(--accent-muted); background: var(--accent-muted-bg); }
 
 .log-row-body { grid-column: 2; min-width: 0; }
 
@@ -698,6 +700,89 @@ kbd {
   color: var(--info);
   opacity: 0.6;
   font-style: normal;
+}
+
+/* ---- Inline messages (User turn / Response) — always rendered open. ---- */
+.log-row.inline-msg { cursor: default; }
+.log-row.inline-msg:hover { background: transparent; }
+.log-row.inline-msg .log-row-head.inline-head { padding-bottom: 4px; }
+.log-row.inline-msg .response-body {
+  margin-top: 4px;
+  padding: 9px 12px 10px 0;
+  font-size: 12.5px;
+  color: var(--text-1);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.log-row.inline-msg .user-bubble {
+  margin-top: 4px;
+  background: var(--info-bg);
+  border: 1px solid rgba(122,167,224,0.25);
+  border-radius: var(--r-sm);
+  padding: 9px 12px;
+  font-family: var(--font-serif);
+  font-size: 13px;
+  color: var(--text-1);
+  line-height: 1.6;
+  font-style: italic;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.log-row.inline-msg .user-bubble::before {
+  content: "❝ ";
+  color: var(--info);
+  opacity: 0.6;
+  font-style: normal;
+}
+
+/* ---- Streak (collapsed run of non-Response events) ---- */
+.log-streak { margin: 2px 0; }
+.log-streak .streak-head { cursor: pointer; }
+.log-streak .streak-head .log-row-kind { color: var(--text-3); }
+.log-streak.open > .streak-head .chev { transform: rotate(90deg); color: var(--text-3); }
+.log-streak .streak-count {
+  color: var(--text-2);
+  font-weight: 500;
+  margin-right: 8px;
+}
+.log-streak .streak-chips {
+  display: inline-flex;
+  gap: 8px;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.log-streak .streak-chip { white-space: nowrap; }
+.log-streak .streak-body {
+  margin-left: 22px;
+  padding-left: 14px;
+  border-left: 1px dashed var(--border-2);
+}
+
+/* ---- Category (collapsed group within a streak) ---- */
+.log-category { margin: 2px 0; }
+.log-category .category-head { cursor: pointer; }
+.log-category.open > .category-head .chev { transform: rotate(90deg); color: var(--text-3); }
+.log-category .category-body {
+  margin-left: 22px;
+  padding-left: 14px;
+  border-left: 1px dashed var(--border-2);
+}
+
+/* Right-side row meta extras (duration, char count) */
+.log-row-meta .meta-extra {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-4);
+  padding: 0 4px 0 0;
+}
+
+/* Detail divider between input and result blocks */
+.log-detail .detail-divider {
+  height: 1px;
+  background: var(--border-1);
+  margin: 4px 0;
 }
 
 /* ---- List View (alternate task pane rendering) ---- */

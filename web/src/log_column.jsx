@@ -5,8 +5,9 @@ import { useArtifact } from './useArtifact.js';
 import { fmtRelativeAgo } from './timeUtils.js';
 
 // Log column — renders formatted session log events.
-// Row + detail layout: icon dot, kind label, summary, meta (time).
-// Click to expand. tool_use rows pull in their paired tool_result.
+// Layout: Response events render inline (always-open). All non-Response events
+// in a turn collapse into a "streak" block; expanding the streak reveals
+// per-category sub-groups; expanding a category reveals individual rows.
 
 const LOG_FILTER_TYPES = [
   { kind: "user",           label: "User" },
@@ -15,38 +16,72 @@ const LOG_FILTER_TYPES = [
   { kind: "tool_result",    label: "Result" },
 ];
 
+const CATEGORY_ORDER = ['user', 'thinking', 'tool', 'tool_result'];
+const CATEGORY_LABEL = {
+  user: 'User',
+  thinking: 'Thinking',
+  tool: 'Tool calls',
+  tool_result: 'Results',
+};
+
 const LogColumn = ({ session, events, onClose, onExpand, collapsed, fixedWidth }) => {
   const [openEvents, setOpenEvents] = React.useState({});
+  const [openStreaks, setOpenStreaks] = React.useState({});
+  const [openCategories, setOpenCategories] = React.useState({});
   const toggleEvt = (id) => setOpenEvents(s => ({ ...s, [id]: !s[id] }));
+  const toggleStreak = (k) => setOpenStreaks(s => ({ ...s, [k]: !s[k] }));
+  const toggleCategory = (k) => setOpenCategories(s => ({ ...s, [k]: !s[k] }));
 
-  // Filter state — all types visible by default
   const [enabled, setEnabled] = React.useState(
     () => Object.fromEntries(LOG_FILTER_TYPES.map(t => [t.kind, true]))
   );
   const [filterOpen, setFilterOpen] = React.useState(false);
-  const filterRef = React.useRef(null);
+  const [popupPos, setPopupPos] = React.useState(null);
+  const filterBtnRef = React.useRef(null);
+  const popupRef = React.useRef(null);
 
-  // Group mode — turn (default) or flat
   const [groupMode, setGroupMode] = React.useState('turn');
 
-  // 1Hz tick to refresh "Xs ago" relative timestamps
   const [now, setNow] = React.useState(() => Date.now());
   React.useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(id);
   }, []);
 
+  // Recompute popup position from button rect; clamp to viewport.
+  const recalcPopup = React.useCallback(() => {
+    const btn = filterBtnRef.current;
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    const popupWidth = 200;
+    const margin = 6;
+    let left = rect.right - popupWidth;
+    if (left < margin) left = margin;
+    if (left + popupWidth > window.innerWidth - margin) {
+      left = window.innerWidth - popupWidth - margin;
+    }
+    setPopupPos({ top: rect.bottom + 4, left });
+  }, []);
+
   React.useEffect(() => {
     if (!filterOpen) return;
+    recalcPopup();
     const onDoc = (e) => {
-      if (filterRef.current && !filterRef.current.contains(e.target)) setFilterOpen(false);
+      const inBtn = filterBtnRef.current && filterBtnRef.current.contains(e.target);
+      const inPop = popupRef.current && popupRef.current.contains(e.target);
+      if (!inBtn && !inPop) setFilterOpen(false);
     };
+    const onResize = () => recalcPopup();
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [filterOpen]);
+    window.addEventListener("resize", onResize);
+    window.addEventListener("scroll", onResize, true);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("scroll", onResize, true);
+    };
+  }, [filterOpen, recalcPopup]);
 
-  // Lazily replay this session's full event JSONL on first render.
-  // Hook is called unconditionally before any early return (rules-of-hooks).
   useArtifact('session.events', { sessionId: session?.id });
 
   if (!session) return null;
@@ -59,43 +94,62 @@ const LogColumn = ({ session, events, onClose, onExpand, collapsed, fixedWidth }
   const filtersActive = activeCount < LOG_FILTER_TYPES.length;
   const turns = buildTurns(sessionEvents);
 
+  // Pre-compute streak/category keys for expand-all.
+  const allKeys = collectExpandableKeys(turns);
+
+  const expandAll = () => {
+    setOpenStreaks(Object.fromEntries(allKeys.streaks.map(k => [k, true])));
+    setOpenCategories(Object.fromEntries(allKeys.categories.map(k => [k, true])));
+    setOpenEvents(Object.fromEntries(allKeys.events.map(k => [k, true])));
+  };
+  const collapseAll = () => {
+    setOpenStreaks({});
+    setOpenCategories({});
+    setOpenEvents({});
+  };
+
   const style = fixedWidth
     ? { flex: `0 0 ${fixedWidth}px`, width: fixedWidth, minWidth: fixedWidth, maxWidth: fixedWidth }
     : { flex: "1 1 360px", minWidth: 300, maxWidth: 560 };
 
   const filterAction = (
-    <div ref={filterRef} style={{ position: "relative" }}>
+    <>
       <button
+        ref={filterBtnRef}
         className="icon-btn"
         onClick={() => setFilterOpen(o => !o)}
         title="Filter log types"
         style={{
           color: filtersActive ? "var(--accent)" : undefined,
           background: filterOpen ? "var(--bg-2)" : undefined,
+          position: "relative",
         }}
       >
         <I.Filter size={12}/>
+        {filtersActive && (
+          <span style={{
+            position: "absolute", top: 1, right: 1,
+            width: 5, height: 5, borderRadius: 999,
+            background: "var(--accent)",
+            pointerEvents: "none",
+          }}/>
+        )}
       </button>
-      {filtersActive && (
-        <span style={{
-          position: "absolute", top: 1, right: 1,
-          width: 5, height: 5, borderRadius: 999,
-          background: "var(--accent)",
-          pointerEvents: "none",
-        }}/>
-      )}
-      {filterOpen && (
+      {filterOpen && popupPos && (
         <div
+          ref={popupRef}
           role="menu"
           style={{
-            position: "absolute", top: "calc(100% + 4px)", right: 0,
+            position: "fixed",
+            top: popupPos.top,
+            left: popupPos.left,
             background: "var(--bg-1)",
             border: "1px solid var(--border-2)",
             borderRadius: "var(--r-md)",
             boxShadow: "0 8px 24px rgba(0,0,0,0.22)",
             padding: 4,
-            minWidth: 160,
-            zIndex: 40,
+            width: 200,
+            zIndex: 1000,
           }}
         >
           <div style={{
@@ -176,7 +230,7 @@ const LogColumn = ({ session, events, onClose, onExpand, collapsed, fixedWidth }
           </button>
         </div>
       )}
-    </div>
+    </>
   );
 
   return (
@@ -190,6 +244,12 @@ const LogColumn = ({ session, events, onClose, onExpand, collapsed, fixedWidth }
             <button className="icon-btn" onClick={onClose} title="Close"><I.X size={14}/></button>
           )}
           {filterAction}
+          <button className="icon-btn" onClick={expandAll} title="Expand all">
+            <I.ChevronDn size={12}/>
+          </button>
+          <button className="icon-btn" onClick={collapseAll} title="Collapse all">
+            <I.ChevronUp size={12}/>
+          </button>
         </>
       }
       title={
@@ -308,7 +368,11 @@ const LogColumn = ({ session, events, onClose, onExpand, collapsed, fixedWidth }
             groupMode={groupMode}
             now={now}
             openEvents={openEvents}
-            onToggle={toggleEvt}
+            openStreaks={openStreaks}
+            openCategories={openCategories}
+            onToggleEvt={toggleEvt}
+            onToggleStreak={toggleStreak}
+            onToggleCategory={toggleCategory}
             showResult={enabled.tool_result !== false}
           />
         ))}
@@ -322,12 +386,10 @@ const LogColumn = ({ session, events, onClose, onExpand, collapsed, fixedWidth }
 // non-user events into an assistant turn.
 // ---------------------------------------------------------------------------
 function buildTurns(events) {
-  // Pair tool_use ↔ tool_result by toolUseId.
   const byId = {};
   for (const e of events) {
     if (e.kind === 'tool_use' && e.toolUseId) byId[e.toolUseId] = e;
   }
-  // Build a side-channel result map so we don't mutate event objects.
   const pairedResultIds = new Set();
   const resultByToolId = {};
   for (const e of events) {
@@ -357,12 +419,75 @@ function buildTurns(events) {
   return turns.map(t => ({ ...t, resultByToolId }));
 }
 
+// Within an assistant turn, split events into ordered segments.
+// Response (assistant_text non-thinking) is its own segment; runs of
+// non-Response events form streak segments.
+function buildSegments(events) {
+  const segs = [];
+  let buf = null;
+  for (const e of events) {
+    const isResponse = e.kind === 'assistant_text' && !e.thinking;
+    if (isResponse) {
+      if (buf) { segs.push(buf); buf = null; }
+      segs.push({ type: 'response', event: e });
+    } else {
+      if (!buf) buf = { type: 'streak', events: [] };
+      buf.events.push(e);
+    }
+  }
+  if (buf) segs.push(buf);
+  return segs;
+}
+
+// Group streak events by category for the second-level reveal.
+function categorize(events) {
+  const groups = { user: [], thinking: [], tool: [], tool_result: [] };
+  for (const e of events) {
+    if (e.kind === 'user') groups.user.push(e);
+    else if (e.kind === 'assistant_text' && e.thinking) groups.thinking.push(e);
+    else if (e.kind === 'tool_use') groups.tool.push(e);
+    else groups.tool_result.push(e);
+  }
+  return groups;
+}
+
+function collectExpandableKeys(turns) {
+  const streaks = [];
+  const categories = [];
+  const events = [];
+  turns.forEach((turn, ti) => {
+    if (turn.kind !== 'assistant') return;
+    const segs = buildSegments(turn.events);
+    segs.forEach((seg, si) => {
+      if (seg.type !== 'streak') return;
+      const sk = `s:${ti}:${si}`;
+      streaks.push(sk);
+      const groups = categorize(seg.events);
+      for (const cat of CATEGORY_ORDER) {
+        if (!groups[cat].length) continue;
+        categories.push(`${sk}:${cat}`);
+        for (const ev of groups[cat]) events.push(ev.id);
+      }
+    });
+  });
+  return { streaks, categories, events };
+}
+
 // ---------------------------------------------------------------------------
 // Turn renderer
 // ---------------------------------------------------------------------------
-function Turn({ turn, index, groupMode, now, openEvents, onToggle, showResult }) {
-  const showDivider = groupMode === 'turn' && turn.kind === 'assistant' && turn.events.length > 1;
-  const singleRow = turn.events.length === 1;
+function Turn({ turn, index, groupMode, now, openEvents, openStreaks, openCategories, onToggleEvt, onToggleStreak, onToggleCategory, showResult }) {
+  if (turn.kind === 'user') {
+    const ev = turn.events[0];
+    return (
+      <div className="turn user-turn">
+        <UserMessage ev={ev} now={now} />
+      </div>
+    );
+  }
+  const segs = buildSegments(turn.events);
+  const showDivider = groupMode === 'turn' && segs.length > 0;
+  const turnIdx = index - 1;
   return (
     <>
       {showDivider && (
@@ -372,20 +497,176 @@ function Turn({ turn, index, groupMode, now, openEvents, onToggle, showResult })
           <span className="meta-time">{fmtTime(turn.ts)}</span>
         </div>
       )}
-      <div className={"turn" + (singleRow ? " single-row" : "") + (groupMode === 'flat' ? " flat" : "")}>
-        {turn.events.map(ev => (
-          <Row
-            key={ev.id}
-            ev={ev}
-            result={ev.kind === 'tool_use' && ev.toolUseId ? turn.resultByToolId[ev.toolUseId] : null}
-            open={!!openEvents[ev.id]}
-            onToggle={() => onToggle(ev.id)}
-            now={now}
-            showResult={showResult}
-          />
-        ))}
+      <div className={"turn" + (groupMode === 'flat' ? " flat" : "")}>
+        {segs.map((seg, si) => {
+          if (seg.type === 'response') {
+            return <ResponseSegment key={si} ev={seg.event} now={now} />;
+          }
+          const sk = `s:${turnIdx}:${si}`;
+          return (
+            <Streak
+              key={si}
+              streakKey={sk}
+              events={seg.events}
+              resultByToolId={turn.resultByToolId}
+              open={!!openStreaks[sk]}
+              openCategories={openCategories}
+              openEvents={openEvents}
+              onToggleStreak={onToggleStreak}
+              onToggleCategory={onToggleCategory}
+              onToggleEvt={onToggleEvt}
+              now={now}
+              showResult={showResult}
+            />
+          );
+        })}
       </div>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// User message — always inline (treated like Response: visible as prose).
+// ---------------------------------------------------------------------------
+function UserMessage({ ev, now }) {
+  const { icon, color, label } = eventStyle(ev);
+  return (
+    <div className="log-row k-user inline-msg">
+      <div className="log-row-icon"><div className="dot" style={{ color }}>{icon}</div></div>
+      <div className="log-row-body">
+        <div className="log-row-head inline-head">
+          <span className="log-row-kind" style={{ color }}>{label}</span>
+          <span className="log-row-meta">
+            {ev.ts && <TimestampMeta ts={ev.ts} now={now} />}
+          </span>
+        </div>
+        <div className="user-bubble">{ev.content}</div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Response — always inline (full content visible, no chevron, no collapse).
+// ---------------------------------------------------------------------------
+function ResponseSegment({ ev, now }) {
+  const { icon, color, label } = eventStyle(ev);
+  return (
+    <div className="log-row k-text inline-msg">
+      <div className="log-row-icon"><div className="dot" style={{ color }}>{icon}</div></div>
+      <div className="log-row-body">
+        <div className="log-row-head inline-head">
+          <span className="log-row-kind" style={{ color }}>{label}</span>
+          <span className="log-row-meta">
+            {ev.ts && <TimestampMeta ts={ev.ts} now={now} />}
+          </span>
+        </div>
+        <div className="response-body">{ev.content}</div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Streak — collapsible block of non-Response events.
+// Header shows event-type breakdown chips. Open → category groups.
+// ---------------------------------------------------------------------------
+function Streak({ streakKey, events, resultByToolId, open, openCategories, openEvents, onToggleStreak, onToggleCategory, onToggleEvt, now, showResult }) {
+  const groups = categorize(events);
+  const presentCats = CATEGORY_ORDER.filter(c => groups[c].length > 0);
+  const breakdown = presentCats.map(c => ({
+    cat: c,
+    n: groups[c].length,
+    color: categoryColor(c),
+  }));
+  const total = events.length;
+
+  return (
+    <div className={"log-streak" + (open ? ' open' : '')}>
+      <div className="log-row streak-head" onClick={() => onToggleStreak(streakKey)}>
+        <div className="log-row-icon">
+          <div className="dot" style={{ color: "var(--text-3)" }}>
+            <I.More size={13}/>
+          </div>
+        </div>
+        <div className="log-row-body">
+          <div className="log-row-head">
+            <I.ChevronRt size={10} className="chev"/>
+            <span className="log-row-kind">Streak</span>
+            <span className="log-row-summary">
+              <span className="streak-count">{total} event{total === 1 ? '' : 's'}</span>
+              <span className="streak-chips">
+                {breakdown.map(b => (
+                  <span key={b.cat} className="streak-chip" style={{ color: b.color }}>
+                    {b.n} {CATEGORY_LABEL[b.cat].toLowerCase()}
+                  </span>
+                ))}
+              </span>
+            </span>
+          </div>
+        </div>
+      </div>
+      {open && (
+        <div className="streak-body">
+          {presentCats.map(cat => (
+            <Category
+              key={cat}
+              catKey={`${streakKey}:${cat}`}
+              kind={cat}
+              events={groups[cat]}
+              resultByToolId={resultByToolId}
+              open={!!openCategories[`${streakKey}:${cat}`]}
+              openEvents={openEvents}
+              onToggleCategory={onToggleCategory}
+              onToggleEvt={onToggleEvt}
+              now={now}
+              showResult={showResult}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Category — collapsible group within a streak. Open → individual rows.
+// ---------------------------------------------------------------------------
+function Category({ catKey, kind, events, resultByToolId, open, openEvents, onToggleCategory, onToggleEvt, now, showResult }) {
+  const color = categoryColor(kind);
+  const icon = categoryIcon(kind);
+  return (
+    <div className={"log-category" + (open ? ' open' : '')}>
+      <div className="log-row category-head" onClick={() => onToggleCategory(catKey)}>
+        <div className="log-row-icon">
+          <div className="dot" style={{ color }}>{icon}</div>
+        </div>
+        <div className="log-row-body">
+          <div className="log-row-head">
+            <I.ChevronRt size={10} className="chev"/>
+            <span className="log-row-kind" style={{ color }}>{CATEGORY_LABEL[kind]}</span>
+            <span className="log-row-summary">
+              <span style={{ color: "var(--text-3)" }}>{events.length}</span>
+            </span>
+          </div>
+        </div>
+      </div>
+      {open && (
+        <div className="category-body">
+          {events.map(ev => (
+            <Row
+              key={ev.id}
+              ev={ev}
+              result={ev.kind === 'tool_use' && ev.toolUseId ? resultByToolId[ev.toolUseId] : null}
+              open={!!openEvents[ev.id]}
+              onToggle={() => onToggleEvt(ev.id)}
+              now={now}
+              showResult={showResult}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -395,6 +676,7 @@ function Turn({ turn, index, groupMode, now, openEvents, onToggle, showResult })
 function Row({ ev, result, open, onToggle, now, showResult }) {
   const { icon, color, label } = eventStyle(ev);
   const klass = kindClass(ev, result);
+  const meta = rowMetaExtras(ev, result);
   return (
     <div className={`log-row ${klass} ${open ? 'open' : ''}`} onClick={onToggle}>
       <div className="log-row-icon">
@@ -406,6 +688,7 @@ function Row({ ev, result, open, onToggle, now, showResult }) {
           <span className="log-row-kind" style={{ color }}>{label}</span>
           <span className="log-row-summary">{summaryFor(ev, result)}</span>
           <span className="log-row-meta">
+            {meta.map((m, i) => <span key={i} className="meta-extra">{m}</span>)}
             {ev.ts && <TimestampMeta ts={ev.ts} now={now} />}
           </span>
         </div>
@@ -415,6 +698,32 @@ function Row({ ev, result, open, onToggle, now, showResult }) {
   );
 }
 
+// Right-side row meta extras (duration, char count) — promoted from the
+// removed inner detail-headers.
+function rowMetaExtras(ev, result) {
+  const out = [];
+  if (ev.kind === 'tool_use') {
+    const r = result;
+    if (r && ev.ts && r.ts) {
+      const dur = fmtDur(ev.ts, r.ts);
+      if (dur) out.push(`Δ ${dur}`);
+    }
+    if (r && r.content != null) {
+      const len = typeof r.content === 'string' ? r.content.length
+                : JSON.stringify(r.content).length;
+      out.push(`${len.toLocaleString()} ch`);
+    }
+  } else if (ev.kind === 'tool_result') {
+    if (ev.content != null) {
+      const len = typeof ev.content === 'string' ? ev.content.length
+                : JSON.stringify(ev.content).length;
+      out.push(`${len.toLocaleString()} ch`);
+    }
+  }
+  return out;
+}
+
+// Detail body — no inner detail-headers; metadata moved to row meta.
 function RowDetail({ ev, result, showResult }) {
   if (ev.kind === 'user') {
     return (
@@ -427,56 +736,30 @@ function RowDetail({ ev, result, showResult }) {
     const isThinking = !!ev.thinking;
     return (
       <div className="log-detail">
-        <div className="detail-section">
-          <div className="detail-header">
-            <span className="label">{isThinking ? 'internal reasoning' : 'assistant'}</span>
-          </div>
-          <div className={"detail-body" + (isThinking ? " serif" : "")}>{ev.content}</div>
-        </div>
+        <div className={"detail-body" + (isThinking ? " serif" : "")}>{ev.content}</div>
       </div>
     );
   }
   if (ev.kind === 'tool_use') {
     const r = result;
     const isErr = !!(r && (r.isError || r.result?.is_error));
-    const dur = r && ev.ts && r.ts ? fmtDur(ev.ts, r.ts) : '';
     return (
       <div className="log-detail">
-        <div className="detail-section">
-          <div className="detail-header">
-            <span className="label">{ev.tool || 'tool'} · input</span>
-            {ev.toolUseId && <span style={{ color: "var(--text-4)", fontSize: 10 }}>{ev.toolUseId}</span>}
-          </div>
-          <ToolInput name={ev.tool} input={ev.input} />
-        </div>
+        <ToolInput name={ev.tool} input={ev.input} />
         {showResult && (
-          <div className="detail-section">
-            <div className={"detail-header" + (isErr ? " err" : "")}>
-              <span className="label">
-                {r ? (isErr ? 'error' : 'result') : 'awaiting result'}
-                {dur && <span style={{ color: "var(--text-4)" }}> · {dur}</span>}
-              </span>
-              {r?.content != null && !isErr && typeof r.content === 'string' && (
-                <span style={{ color: "var(--text-4)", fontSize: 10 }}>{r.content.length.toLocaleString()} chars</span>
-              )}
-            </div>
-            <ToolResult name={ev.tool} result={r} />
-          </div>
+          <>
+            <div className="detail-divider"/>
+            <ToolResult name={ev.tool} result={r} isErr={isErr} />
+          </>
         )}
       </div>
     );
   }
   if (ev.kind === 'tool_result') {
-    // Unpaired tool_result (rare — toolUseId missing). Render content directly.
     const isErr = !!(ev.isError || ev.result?.is_error);
     return (
       <div className="log-detail">
-        <div className="detail-section">
-          <div className={"detail-header" + (isErr ? " err" : "")}>
-            <span className="label">{isErr ? 'error' : 'result'}</span>
-          </div>
-          <ToolResult name="" result={ev} />
-        </div>
+        <ToolResult name="" result={ev} isErr={isErr} />
       </div>
     );
   }
@@ -568,15 +851,15 @@ function ToolInput({ name, input }) {
 // ---------------------------------------------------------------------------
 // Smart tool result renderers (per design)
 // ---------------------------------------------------------------------------
-function ToolResult({ name, result }) {
+function ToolResult({ name, result, isErr }) {
   if (!result) return <div className="detail-body" style={{ color: "var(--text-4)", fontStyle: "italic" }}>awaiting result…</div>;
 
-  const isErr = !!(result.isError || result.result?.is_error);
+  const errorState = isErr ?? !!(result.isError || result.result?.is_error);
   const content = typeof result.content === 'string'
     ? result.content
     : result.content != null ? JSON.stringify(result.content, null, 2) : '';
 
-  if (isErr) return <div className="err-body">{content || 'error'}</div>;
+  if (errorState) return <div className="err-body">{content || 'error'}</div>;
 
   const n = (name || '').toLowerCase();
 
@@ -654,8 +937,8 @@ function LongText({ content, max = 800 }) {
 function eventStyle(ev) {
   if (ev.kind === 'user') return { icon: <I.User size={13}/>, color: "var(--info)", label: "User" };
   if (ev.kind === 'assistant_text') {
-    if (ev.thinking) return { icon: <I.Brain size={13}/>, color: "var(--purple)", label: "Thinking" };
-    return { icon: <I.MessageSq size={13}/>, color: "var(--accent)", label: "Response" };
+    if (ev.thinking) return { icon: <I.Brain size={13}/>, color: "var(--purple)", label: "internal reasoning" };
+    return { icon: <I.MessageSq size={13}/>, color: "var(--accent-muted)", label: "Response" };
   }
   if (ev.kind === 'tool_use') return { icon: toolIcon(ev.tool), color: "var(--ok)", label: ev.tool || "Tool" };
   if (ev.kind === 'tool_result') return { icon: <I.CheckCircle size={13}/>, color: "var(--ok)", label: "Result" };
@@ -672,6 +955,22 @@ function toolIcon(name) {
   if (n.includes('web')) return <I.Globe size={13}/>;
   if (n.includes('todo') || n.includes('list')) return <I.List size={13}/>;
   return <I.Wrench size={13}/>;
+}
+
+function categoryColor(cat) {
+  if (cat === 'user') return 'var(--info)';
+  if (cat === 'thinking') return 'var(--purple)';
+  if (cat === 'tool') return 'var(--ok)';
+  if (cat === 'tool_result') return 'var(--ok)';
+  return 'var(--text-3)';
+}
+
+function categoryIcon(cat) {
+  if (cat === 'user') return <I.User size={13}/>;
+  if (cat === 'thinking') return <I.Brain size={13}/>;
+  if (cat === 'tool') return <I.Wrench size={13}/>;
+  if (cat === 'tool_result') return <I.CheckCircle size={13}/>;
+  return <I.Dot size={13}/>;
 }
 
 function kindClass(ev, result) {
@@ -691,9 +990,7 @@ function kindClass(ev, result) {
 
 function summaryFor(ev, result) {
   if (ev.kind === 'user') return <>{truncate(ev.content, 180)}</>;
-  if (ev.kind === 'assistant_text' && ev.thinking) {
-    return <em style={{ fontStyle: "italic" }}>{truncate(ev.content, 160)}</em>;
-  }
+  if (ev.kind === 'assistant_text' && ev.thinking) return null;
   if (ev.kind === 'assistant_text') return <>{truncate(ev.content, 160)}</>;
   if (ev.kind === 'tool_use') {
     const input = ev.input || {};
