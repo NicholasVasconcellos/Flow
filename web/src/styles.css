@@ -695,3 +695,44 @@ kbd {
   font-style: normal;
 }
 
+/* ---- List View (alternate task pane rendering) ---- */
+.list-view {
+  display: flex;
+  flex-direction: column;
+  min-width: max-content; /* let rows extend to content; outer scroller h-scrolls */
+  width: 100%;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.list-header {
+  display: flex;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border-2);
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  height: 28px;
+  min-width: max-content;
+}
+.list-row {
+  display: flex;
+  align-items: stretch;
+  height: 36px;
+  border-bottom: 1px solid var(--border-1);
+  border-left: 3px solid transparent;
+  cursor: pointer;
+  background: transparent;
+  transition: background 0.08s ease, border-color 0.08s ease;
+  min-width: max-content;
+}
+.list-row.hovered { background: var(--bg-2); }
+.list-row.selected {
+  background: var(--bg-3);
+  border-left-color: var(--accent);
+}
+.list-row.selected.hovered { background: var(--bg-3); }
