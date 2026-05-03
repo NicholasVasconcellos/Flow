@@ -31,8 +31,30 @@ export const initialState = {
   // bridges live session.event frames and artifact.chunk session.events
   // replays. Per-session Set; never render from this.
   _seenEventKeys: {},
-  errors: [],
+  SERVER: { version: null, readOnly: false, supportedCommands: [] },
 };
+
+// Single source of truth for button-disabling. Empty supportedCommands means
+// the server hasn't said hello yet — be permissive so buttons aren't briefly
+// disabled on first paint.
+export function isCommandAllowed(cmdType, server) {
+  if (!server) return true;
+  const list = server.supportedCommands;
+  if (!Array.isArray(list) || list.length === 0) return true;
+  if (!list.includes(cmdType)) return false;
+  if (server.readOnly) {
+    const READ_ONLY_OK = new Set([
+      'project.list',
+      'project.open',
+      'project.close',
+      'artifact.fetch',
+      'config.get',
+      'config.stages.get',
+    ]);
+    return READ_ONLY_OK.has(cmdType);
+  }
+  return true;
+}
 
 // ---------------------------------------------------------------------------
 // Artifact key helpers — keep in lockstep with useArtifact.js. The same
@@ -332,8 +354,20 @@ export function applyEvent(state, frame) {
 
   switch (type) {
     // -----------------------------------------------------------------------
-    case 'hello':
-      return { ...state, version: frame.version };
+    case 'hello': {
+      const cap = frame.capabilities ?? {};
+      return {
+        ...state,
+        version: frame.version,
+        SERVER: {
+          version: frame.version ?? null,
+          readOnly: !!cap.readOnly,
+          supportedCommands: Array.isArray(cap.supportedCommands)
+            ? cap.supportedCommands
+            : [],
+        },
+      };
+    }
 
     // -----------------------------------------------------------------------
     case 'project.list':
@@ -727,8 +761,13 @@ export function applyEvent(state, frame) {
 
     // -----------------------------------------------------------------------
     case 'error': {
-      const err = { requestId: frame.requestId, message: frame.message };
-      return { ...state, errors: [...state.errors, err] };
+      // `error` frames now only fire for protocol-level parse failures (the
+      // requestId may not even be known). Surface to console for triage and
+      // pass state through unchanged — the toast layer handles user-visible
+      // command failures via command.result.
+      // eslint-disable-next-line no-console
+      console.warn('ws error frame:', frame.message, frame.requestId ?? '(no requestId)');
+      return state;
     }
 
     // -----------------------------------------------------------------------

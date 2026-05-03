@@ -660,7 +660,7 @@ test("task.retry and task.resume both forward to retryTask", async () => {
   }
 });
 
-test("project.open with different path returns error", async () => {
+test("project.open with different path returns command.result {ok:false}", async () => {
   const { flow } = makeFakeFlow();
   const server = await startWsServer({ flow, port: 0, version: "0.1.0" });
   try {
@@ -668,11 +668,14 @@ test("project.open with different path returns error", async () => {
     try {
       await c.waitFor((m) => m.type === "config");
       c.send({ type: "project.open", path: "/different/path", requestId: "po-1" });
-      const err = await c.waitFor((m) => m.type === "error");
-      assert.equal(
-        (err as { type: "error"; requestId?: string }).requestId,
-        "po-1",
+      const msg = await c.waitFor(
+        (m) =>
+          m.type === "command.result" &&
+          (m as { requestId: string }).requestId === "po-1",
       );
+      const result = msg as { type: "command.result"; ok: boolean; message?: string };
+      assert.equal(result.ok, false);
+      assert.match(String(result.message), /single project/i);
     } finally {
       await c.close();
     }
@@ -702,7 +705,7 @@ test("project.list returns empty projects list (v1 stub)", async () => {
   }
 });
 
-test("readOnly mode rejects mutating commands with a typed error", async () => {
+test("readOnly mode rejects mutating commands with command.result {ok:false}", async () => {
   const { flow } = makeFakeFlow();
   // Override isReadOnly without recreating the whole fake.
   (flow as { isReadOnly: () => boolean }).isReadOnly = () => true;
@@ -714,13 +717,80 @@ test("readOnly mode rejects mutating commands with a typed error", async () => {
       c.send({ type: "task.retry", taskId: "T1", requestId: "r1" });
       const msg = await c.waitFor(
         (m) =>
-          m.type === "error" &&
-          (m as { requestId?: string }).requestId === "r1",
+          m.type === "command.result" &&
+          (m as { requestId: string }).requestId === "r1",
       );
-      assert.match(
-        (msg as { message: string }).message,
-        /read-only/i,
+      const result = msg as {
+        type: "command.result";
+        requestId: string;
+        ok: boolean;
+        message?: string;
+      };
+      assert.equal(result.ok, false);
+      assert.match(String(result.message), /read-only/i);
+    } finally {
+      await c.close();
+    }
+  } finally {
+    await server.close();
+  }
+});
+
+test("hello frame advertises capabilities in read-only mode", async () => {
+  const { flow } = makeFakeFlow();
+  (flow as { isReadOnly: () => boolean }).isReadOnly = () => true;
+  const server = await startWsServer({ flow, port: 0, version: "0.1.0" });
+  try {
+    const c = await connect(server.port);
+    try {
+      const hello = await c.waitFor((m) => m.type === "hello");
+      const h = hello as {
+        type: "hello";
+        version: string;
+        capabilities: { readOnly: boolean; supportedCommands: string[] };
+      };
+      assert.equal(h.capabilities.readOnly, true);
+      assert.ok(Array.isArray(h.capabilities.supportedCommands));
+      // All 18 wire commands should be advertised.
+      assert.equal(h.capabilities.supportedCommands.length, 18);
+      for (const expected of [
+        "task.retry",
+        "task.cancel",
+        "task.resume",
+        "run.once",
+        "run.all",
+        "run.cancel",
+        "notification.clearAll",
+        "config.get",
+      ]) {
+        assert.ok(
+          h.capabilities.supportedCommands.includes(expected),
+          `missing supportedCommand: ${expected}`,
+        );
+      }
+    } finally {
+      await c.close();
+    }
+  } finally {
+    await server.close();
+  }
+});
+
+test("task.retry against a normal flow yields command.result {ok:true}", async () => {
+  const { flow } = makeFakeFlow();
+  const server = await startWsServer({ flow, port: 0, version: "0.1.0" });
+  try {
+    const c = await connect(server.port);
+    try {
+      await c.waitFor((m) => m.type === "config");
+      c.send({ type: "task.retry", taskId: "T1", requestId: "rt-ok" });
+      const msg = await c.waitFor(
+        (m) =>
+          m.type === "command.result" &&
+          (m as { requestId: string }).requestId === "rt-ok",
       );
+      const result = msg as { type: "command.result"; ok: boolean };
+      assert.equal(result.ok, true);
     } finally {
       await c.close();
     }

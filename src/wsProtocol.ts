@@ -114,6 +114,31 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
 
 export type ClientCommand = z.infer<typeof ClientCommandSchema>;
 
+// Source of truth for the set of supported command types. Consumed by the
+// server when populating `hello.capabilities.supportedCommands` and by tests
+// that need to enumerate the wire surface. The `satisfies` clause keeps this
+// in lockstep with the discriminated union literals above.
+export const CLIENT_COMMAND_TYPES = [
+  "project.list",
+  "project.open",
+  "project.create",
+  "project.close",
+  "run.once",
+  "run.allOnce",
+  "run.all",
+  "run.cancel",
+  "task.retry",
+  "task.cancel",
+  "task.resume",
+  "artifact.fetch",
+  "notification.ack",
+  "notification.clearAll",
+  "config.get",
+  "config.update",
+  "config.stages.get",
+  "config.stages.update",
+] as const satisfies readonly ClientCommand["type"][];
+
 // ---------------------------------------------------------------------------
 // Server → Client
 // ---------------------------------------------------------------------------
@@ -122,8 +147,25 @@ export type ClientCommand = z.infer<typeof ClientCommandSchema>;
 // outbound side — types are sufficient. `project?` on `hello` is optional per
 // the plan; we send `project.state` as a separate frame when a project is open.
 
+export interface ServerCapabilities {
+  readOnly: boolean;
+  supportedCommands: readonly string[];
+}
+
 export type ServerEvent =
-  | { type: "hello"; version: string; project?: Project }
+  | {
+      type: "hello";
+      version: string;
+      project?: Project;
+      capabilities: ServerCapabilities;
+    }
+  | {
+      type: "command.result";
+      requestId: string;
+      ok: boolean;
+      message?: string;
+      data?: unknown;
+    }
   | { type: "project.list"; projects: ProjectSummary[] }
   | { type: "project.state"; project: Project }
   | { type: "task.upsert"; task: TaskRuntime }

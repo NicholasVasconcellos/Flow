@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert';
 
-import { initialState, applyEvent, artifactKey } from '../src/store.js';
+import { initialState, applyEvent, artifactKey, isCommandAllowed } from '../src/store.js';
 
 // ---------------------------------------------------------------------------
 // Load snapshot and build full-replay state
@@ -37,6 +37,42 @@ test('1. hello frame sets state.version', () => {
   const helloFrame = frames.find((f) => f.type === 'hello');
   const s = applyEvent(initialState, helloFrame);
   assert.strictEqual(s.version, '0.1.0');
+});
+
+test('1b. hello frame stores SERVER {readOnly, supportedCommands}', () => {
+  const helloFrame = frames.find((f) => f.type === 'hello');
+  const s = applyEvent(initialState, helloFrame);
+  assert.ok(s.SERVER, 'SERVER slot should exist');
+  assert.strictEqual(typeof s.SERVER.readOnly, 'boolean');
+  assert.ok(Array.isArray(s.SERVER.supportedCommands));
+  // The fixture hello carries the full 18-command capability list.
+  assert.ok(s.SERVER.supportedCommands.includes('task.retry'));
+  assert.ok(s.SERVER.supportedCommands.includes('notification.clearAll'));
+});
+
+test('1c. initial state no longer carries an `errors` slot', () => {
+  assert.strictEqual('errors' in initialState, false);
+});
+
+test('1d. command.result frames are pass-through (do not mutate store)', () => {
+  const before = applyEvent(initialState, { type: 'hello', version: '0.1.0', capabilities: { readOnly: false, supportedCommands: [] } });
+  const after = applyEvent(before, { type: 'command.result', requestId: 'r1', ok: false, message: 'oops' });
+  // Equality via JSON sidesteps the implementation detail of nested Sets.
+  assert.deepEqual({ ...after, _seenEventKeys: null }, { ...before, _seenEventKeys: null });
+});
+
+test('1e. isCommandAllowed gates buttons on read-only and unknown commands', () => {
+  const liveServer = { version: '0.1.0', readOnly: false, supportedCommands: ['task.retry', 'run.once'] };
+  assert.strictEqual(isCommandAllowed('task.retry', liveServer), true);
+  assert.strictEqual(isCommandAllowed('run.cancel', liveServer), false);
+
+  const roServer = { version: '0.1.0', readOnly: true, supportedCommands: ['task.retry', 'run.once', 'project.list'] };
+  assert.strictEqual(isCommandAllowed('task.retry', roServer), false);
+  assert.strictEqual(isCommandAllowed('project.list', roServer), true);
+
+  // Empty supportedCommands (pre-hello) is permissive — buttons aren't briefly disabled on first paint.
+  const empty = { readOnly: false, supportedCommands: [] };
+  assert.strictEqual(isCommandAllowed('task.retry', empty), true);
 });
 
 test('2. project.list sets PROJECTS array', () => {

@@ -10,8 +10,25 @@ const FlowDataProvider = ({ children }) => {
   );
 
   const sendCommandRef = useRef(null);
+  const sendCommandAwaitRef = useRef(null);
+  const commandFailureSubRef = useRef(null);
+
   const setSendCommand = useCallback((fn) => { sendCommandRef.current = fn; }, []);
+  const setSendCommandAwait = useCallback((fn) => { sendCommandAwaitRef.current = fn; }, []);
+  const setCommandFailureSubscriber = useCallback((fn) => {
+    commandFailureSubRef.current = fn;
+  }, []);
+
   const sendCommand = useCallback((cmd) => sendCommandRef.current?.(cmd), []);
+  const sendCommandAwait = useCallback((cmd, opts) => {
+    const fn = sendCommandAwaitRef.current;
+    if (!fn) return Promise.reject(new Error('not connected'));
+    return fn(cmd, opts);
+  }, []);
+  const onCommandFailure = useCallback((cb) => {
+    const fn = commandFailureSubRef.current;
+    return fn ? fn(cb) : () => {};
+  }, []);
 
   const value = useMemo(() => {
     const TASKS = Object.values(state.TASKS);
@@ -22,9 +39,21 @@ const FlowDataProvider = ({ children }) => {
       SESSIONS,
       dispatch: dispatchRaw,
       sendCommand,
+      sendCommandAwait,
+      onCommandFailure,
       setSendCommand,
+      setSendCommandAwait,
+      setCommandFailureSubscriber,
     };
-  }, [state, sendCommand, setSendCommand]);
+  }, [
+    state,
+    sendCommand,
+    sendCommandAwait,
+    onCommandFailure,
+    setSendCommand,
+    setSendCommandAwait,
+    setCommandFailureSubscriber,
+  ]);
 
   return (
     <FlowDataContext.Provider value={value}>

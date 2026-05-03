@@ -3,7 +3,11 @@ import type { AddressInfo } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import type { Flow } from "./flow.js";
-import { ClientCommandSchema, type ServerEvent } from "./wsProtocol.js";
+import {
+  ClientCommandSchema,
+  CLIENT_COMMAND_TYPES,
+  type ServerEvent,
+} from "./wsProtocol.js";
 
 export interface WsServerOpts {
   port?: number; // default opts.flow.getConfig().ws.port or 7777
@@ -132,7 +136,14 @@ export async function startWsServer(opts: WsServerOpts): Promise<WsServer> {
     };
 
     // 1) hello
-    sendToThis({ type: "hello", version });
+    sendToThis({
+      type: "hello",
+      version,
+      capabilities: {
+        readOnly: flow.isReadOnly(),
+        supportedCommands: [...CLIENT_COMMAND_TYPES],
+      },
+    });
 
     // 2) project.state if a project is open
     void (async () => {
@@ -242,10 +253,34 @@ async function handleCommand(
   flow: Flow,
 ): Promise<void> {
   const requestId = cmd.requestId;
-  const replyError = (message: string): void => {
-    const payload: ServerEvent = { type: "error", message };
-    if (requestId !== undefined) payload.requestId = requestId;
+
+  // Single-shot result emitter. Every command yields exactly one
+  // `command.result` (when a requestId is set) — `replySuccess` and
+  // `replyFailure` are gated by `resolved` so duplicate calls (e.g. fire-
+  // and-forget paths whose async tail rejects after we've already accepted)
+  // are silently dropped. Falls back to the legacy `error` frame when no
+  // requestId is available.
+  let resolved = false;
+  const replySuccess = (data?: unknown): void => {
+    if (resolved) return;
+    resolved = true;
+    if (requestId === undefined) return;
+    const payload: ServerEvent = {
+      type: "command.result",
+      requestId,
+      ok: true,
+    };
+    if (data !== undefined) payload.data = data;
     reply(payload);
+  };
+  const replyError = (message: string): void => {
+    if (resolved) return;
+    resolved = true;
+    if (requestId !== undefined) {
+      reply({ type: "command.result", requestId, ok: false, message });
+    } else {
+      reply({ type: "error", message });
+    }
   };
 
   const MUTATING_COMMANDS = new Set([
@@ -275,6 +310,7 @@ async function handleCommand(
         // Stub: we don't have a multi-project registry yet. Document this in
         // wsProtocol so the frontend knows to expect an empty list for now.
         reply({ type: "project.list", projects: [] });
+        replySuccess();
         return;
       }
       case "project.open": {
@@ -286,6 +322,7 @@ async function handleCommand(
           return;
         }
         reply({ type: "project.state", project: current });
+        replySuccess();
         return;
       }
       case "project.create": {
@@ -298,24 +335,29 @@ async function handleCommand(
       }
 
       // --- run.* — fire-and-forget; events drive the UI -------------------
+      // Acceptance is the result we report. Late failures from the runner
+      // surface via session events / notifications, not the WS reply.
       case "run.once": {
-        void flow.runOnce().catch((err: Error) => {
-          replyError(`run.once failed: ${err.message}`);
+        void flow.runOnce().catch(() => {
+          /* tail-error surfaces via events */
         });
+        replySuccess();
         return;
       }
       case "run.allOnce": {
         const opts = cmd.limit !== undefined ? { limit: cmd.limit } : undefined;
-        void flow.runAllOnce(opts).catch((err: Error) => {
-          replyError(`run.allOnce failed: ${err.message}`);
+        void flow.runAllOnce(opts).catch(() => {
+          /* tail-error surfaces via events */
         });
+        replySuccess();
         return;
       }
       case "run.all": {
         const opts = cmd.limit !== undefined ? { limit: cmd.limit } : undefined;
-        void flow.runAll(opts).catch((err: Error) => {
-          replyError(`run.all failed: ${err.message}`);
+        void flow.runAll(opts).catch(() => {
+          /* tail-error surfaces via events */
         });
+        replySuccess();
         return;
       }
       case "run.cancel": {
@@ -323,7 +365,9 @@ async function handleCommand(
           flow.stop();
         } catch (err) {
           replyError(`run.cancel failed: ${(err as Error).message}`);
+          return;
         }
+        replySuccess();
         return;
       }
 
@@ -333,13 +377,15 @@ async function handleCommand(
         // Fire-and-forget: clients observe progress via the event stream, not
         // the WS reply. Awaiting here would orphan the pipeline if the client
         // disconnects mid-run.
-        void flow.retryTask(cmd.taskId).catch((err: Error) => {
-          replyError(`task.retry failed: ${err.message}`);
+        void flow.retryTask(cmd.taskId).catch(() => {
+          /* tail-error surfaces via events */
         });
+        replySuccess();
         return;
       }
       case "task.cancel": {
         await flow.cancelTask(cmd.taskId);
+        replySuccess();
         return;
       }
 
@@ -363,6 +409,8 @@ async function handleCommand(
             });
           }
           reply({ type: "artifact.end", fetchId, kind, ids });
+          // Result is bound to the terminal frame, not the chunks.
+          replySuccess();
         } catch (err) {
           reply({
             type: "artifact.error",
@@ -371,6 +419,7 @@ async function handleCommand(
             ids,
             message: (err as Error).message,
           });
+          replyError(`artifact.fetch failed: ${(err as Error).message}`);
         }
         return;
       }
@@ -378,16 +427,19 @@ async function handleCommand(
       // --- notifications ---------------------------------------------------
       case "notification.ack": {
         await flow.ackNotification(cmd.id);
+        replySuccess();
         return;
       }
       case "notification.clearAll": {
         await flow.clearNotifications();
+        replySuccess();
         return;
       }
 
       // --- config.* --------------------------------------------------------
       case "config.get": {
         reply({ type: "config", config: flow.getConfig() });
+        replySuccess();
         return;
       }
       case "config.update": {
@@ -397,11 +449,13 @@ async function handleCommand(
         // flow.updateConfig emits `config` on the bus which broadcasts to all
         // clients. No need for a direct reply — the broadcast is authoritative.
         void next;
+        replySuccess();
         return;
       }
       case "config.stages.get": {
         const cfg = flow.getConfig();
         reply({ type: "config.stages", stages: cfg.stages ?? {} });
+        replySuccess();
         return;
       }
       case "config.stages.update": {
@@ -416,6 +470,7 @@ async function handleCommand(
         await flow.updateConfig({ stages: merged });
         const after = flow.getConfig();
         reply({ type: "config.stages", stages: after.stages ?? {} });
+        replySuccess();
         return;
       }
     }

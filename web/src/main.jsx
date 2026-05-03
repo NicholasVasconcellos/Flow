@@ -6,6 +6,7 @@ import { ProjectScreen } from './project_screen.jsx';
 import { FlowDataProvider, useFlowData } from './FlowDataContext.jsx';
 import { loadFixture } from './fixtureReplay.js';
 import { createWsClient, getWsUrl, isFixtureMode } from './wsClient.js';
+import { ToastHost } from './Toast.jsx';
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -62,7 +63,12 @@ function ConnectionBanner({ status, wsUrl }) {
 }
 
 function App() {
-  const { dispatch, setSendCommand } = useFlowData();
+  const {
+    dispatch,
+    setSendCommand,
+    setSendCommandAwait,
+    setCommandFailureSubscriber,
+  } = useFlowData();
   const clientRef = useRef(null);
   const fixture = isFixtureMode();
   const wsUrl = getWsUrl();
@@ -76,12 +82,15 @@ function App() {
     const client = createWsClient(wsUrl, dispatch, setStatus);
     clientRef.current = client;
     setSendCommand((cmd) => client.send(cmd));
+    setSendCommandAwait((cmd, opts) => client.sendCommandAwait(cmd, opts));
+    setCommandFailureSubscriber((cb) => client.onCommandFailure(cb));
     return () => client.stop();
   }, []);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       <ConnectionBanner status={status} wsUrl={wsUrl} />
+      <ToastHost />
       <div style={{ flex: 1, minHeight: 0 }}>
         <ProjectScreen />
       </div>
