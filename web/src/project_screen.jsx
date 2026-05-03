@@ -6,6 +6,7 @@ import { LogColumn } from './log_column.jsx';
 import { TaskDetailsPanel } from './task_details.jsx';
 import { ContextChartsPanel, LearningsPanel, NotificationsPanel } from './side_panels.jsx';
 import { useFlowData } from './FlowDataContext.jsx';
+import { isCommandAllowed } from './store.js';
 import {
   defaultTree,
   flattenTreeToCol,
@@ -691,6 +692,7 @@ const TopBar = ({ onResetLayout, flatDir, onFlatten }) => {
       <span className="mono" style={{ fontSize: 11, color: "var(--text-4)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0, flexShrink: 1 }}>{PROJECT_PATH}</span>
       <div style={{ flex: 1, minWidth: 8 }}/>
       <ProjectStatusPill/>
+      <RunControls/>
       {repoSlug && (
         <button className="btn sm" style={{ whiteSpace: "nowrap", flexShrink: 0 }}>
           <I.Github size={12}/> {repoSlug}
@@ -813,6 +815,43 @@ const TopBar = ({ onResetLayout, flatDir, onFlatten }) => {
         )}
       </div>
     </div>
+  );
+};
+
+const RunControls = () => {
+  const { sendCommandAwait, SERVER } = useFlowData();
+  return (
+    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+      <RunButton label="Run once" cmdType="run.once" payload={{ type: "run.once" }} server={SERVER} send={sendCommandAwait}/>
+      <RunButton label="Run all" cmdType="run.all" payload={{ type: "run.all" }} server={SERVER} send={sendCommandAwait}/>
+      <RunButton label="Cancel all" cmdType="run.cancel" payload={{ type: "run.cancel" }} server={SERVER} send={sendCommandAwait}/>
+    </div>
+  );
+};
+
+const RunButton = ({ label, cmdType, payload, server, send }) => {
+  const [pending, setPending] = React.useState(false);
+  const allowed = isCommandAllowed(cmdType, server);
+  const onClick = async () => {
+    setPending(true);
+    try { await send(payload); } catch { /* toast surfaces failure */ }
+    finally { setPending(false); }
+  };
+  const tooltip = !allowed
+    ? (server?.readOnly
+        ? `${cmdType} disabled — server is read-only`
+        : `${cmdType} not supported`)
+    : label;
+  return (
+    <button
+      className="btn sm"
+      onClick={onClick}
+      disabled={pending || !allowed}
+      title={tooltip}
+      style={{ whiteSpace: "nowrap" }}
+    >
+      {pending ? "…" : label}
+    </button>
   );
 };
 

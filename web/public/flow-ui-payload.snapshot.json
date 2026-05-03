@@ -2,7 +2,30 @@
   "FLOW_WS_FRAMES": [
     {
       "type": "hello",
-      "version": "0.1.0"
+      "version": "0.1.0",
+      "capabilities": {
+        "readOnly": false,
+        "supportedCommands": [
+          "project.list",
+          "project.open",
+          "project.create",
+          "project.close",
+          "run.once",
+          "run.allOnce",
+          "run.all",
+          "run.cancel",
+          "task.retry",
+          "task.cancel",
+          "task.resume",
+          "artifact.fetch",
+          "notification.ack",
+          "notification.clearAll",
+          "config.get",
+          "config.update",
+          "config.stages.get",
+          "config.stages.update"
+        ]
+      }
     },
     {
       "type": "project.list",
@@ -18232,6 +18255,17 @@
       "ids": {
         "sessionId": "01KPZ39SF2PGX50Z5BDB64BJYQ"
       }
+    },
+    {
+      "type": "command.result",
+      "requestId": "task-retry-1",
+      "ok": true
+    },
+    {
+      "type": "command.result",
+      "requestId": "notification-clear-all-readonly",
+      "ok": false,
+      "message": "notification.clearAll is not permitted: serve runs read-only."
     }
   ],
   "FLOW_CLIENT_COMMANDS": [

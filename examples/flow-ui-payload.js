@@ -569,8 +569,33 @@ const replaySession =
 const firstNotification = NOTIFICATIONS[0];
 const projectError = readJsonl(path.join(FLOW_DIR, "notifications.jsonl"))[0];
 
+const SUPPORTED_COMMANDS = [
+  "project.list",
+  "project.open",
+  "project.create",
+  "project.close",
+  "run.once",
+  "run.allOnce",
+  "run.all",
+  "run.cancel",
+  "task.retry",
+  "task.cancel",
+  "task.resume",
+  "artifact.fetch",
+  "notification.ack",
+  "notification.clearAll",
+  "config.get",
+  "config.update",
+  "config.stages.get",
+  "config.stages.update",
+];
+
 export const FLOW_WS_FRAMES = [
-  { type: "hello", version: "0.1.0" },
+  {
+    type: "hello",
+    version: "0.1.0",
+    capabilities: { readOnly: false, supportedCommands: SUPPORTED_COMMANDS },
+  },
   {
     type: "project.list",
     projects: [
@@ -619,6 +644,14 @@ export const FLOW_WS_FRAMES = [
     requestId: "project-open-pkmn-t8",
     message: projectError?.body ?? "No downstream Flow error notifications found.",
   },
+  // Representative command.result frames — one success, one read-only failure.
+  { type: "command.result", requestId: "task-retry-1", ok: true },
+  {
+    type: "command.result",
+    requestId: "notification-clear-all-readonly",
+    ok: false,
+    message: "notification.clearAll is not permitted: serve runs read-only.",
+  },
 ];
 
 export const FLOW_CLIENT_COMMANDS = [
@@ -640,6 +673,7 @@ export const FLOW_CLIENT_COMMANDS = [
   { type: "task.resume", taskId: readyTask.id, requestId: "task-resume-1" },
   { type: "artifact.fetch", fetchId: "session-events-1", kind: "session.events", ids: { sessionId: replaySession.id }, requestId: "artifact-fetch-1" },
   { type: "notification.ack", id: firstNotification?.id ?? "notification-ack", requestId: "notification-ack-1" },
+  { type: "notification.clearAll", requestId: "notification-clear-all-readonly" },
   { type: "config.get", requestId: "config-get-1" },
   { type: "config.update", patch: { retryCount: 1, maxConcurrent: 4 }, requestId: "config-update-1" },
   { type: "config.stages.get", requestId: "config-stages-get-1" },

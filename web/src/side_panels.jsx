@@ -166,13 +166,21 @@ const LearningsPanel = () => {
 };
 
 const NotificationsPanel = () => {
-  const { NOTIFICATIONS, NOTIFICATIONS_TRUNCATED, TASKS, sendCommand } = useFlowData();
+  const { NOTIFICATIONS, NOTIFICATIONS_TRUNCATED, TASKS, sendCommandAwait } = useFlowData();
   const [loadOlder, setLoadOlder] = React.useState(false);
   const [confirming, setConfirming] = React.useState(false);
-  const onClearAll = React.useCallback(() => {
-    sendCommand({ type: 'notification.clearAll' });
-    setConfirming(false);
-  }, [sendCommand]);
+  const [clearing, setClearing] = React.useState(false);
+  const onClearAll = React.useCallback(async () => {
+    setClearing(true);
+    try {
+      await sendCommandAwait({ type: 'notification.clearAll' });
+      setConfirming(false);
+    } catch {
+      // Toast layer surfaces the failure; leave confirmer open so the user can retry.
+    } finally {
+      setClearing(false);
+    }
+  }, [sendCommandAwait]);
   // Mounting LoadOlderTrigger fires the artifact.fetch via useArtifact at render
   // time (declarative). The button just toggles the trigger into the tree.
   return (
@@ -185,8 +193,10 @@ const NotificationsPanel = () => {
           <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
             {confirming ? (
               <>
-                <button className="btn sm" onClick={() => setConfirming(false)}>Cancel</button>
-                <button className="btn sm primary" onClick={onClearAll}>Confirm clear</button>
+                <button className="btn sm" onClick={() => setConfirming(false)} disabled={clearing}>Cancel</button>
+                <button className="btn sm primary" onClick={onClearAll} disabled={clearing}>
+                  {clearing ? 'Clearing…' : 'Confirm clear'}
+                </button>
               </>
             ) : (
               <button className="btn sm" onClick={() => setConfirming(true)}>Clear all</button>

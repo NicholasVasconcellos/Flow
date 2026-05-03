@@ -3,6 +3,7 @@ import { I } from './icons.jsx';
 import { StagePill, StatusBadge, ContextDonut, formatK, formatCost } from './primitives.jsx';
 import { useFlowData } from './FlowDataContext.jsx';
 import { useArtifact } from './useArtifact.js';
+import { isCommandAllowed } from './store.js';
 
 // Task Details Panel — shown when a node is selected
 const TaskDetailsPanel = ({ taskId, openLog, openLogIds = [] }) => {
@@ -67,6 +68,7 @@ const TaskDetailsPanel = ({ taskId, openLog, openLogIds = [] }) => {
             {task.title}
           </div>
         </div>
+        <TaskActionBar task={task}/>
       </div>
 
       {/* Capability flags */}
@@ -283,6 +285,76 @@ const TaskDetailsPanel = ({ taskId, openLog, openLogIds = [] }) => {
         </>
       )}
     </div>
+  );
+};
+
+const TaskActionBar = ({ task }) => {
+  const { sendCommandAwait, SERVER } = useFlowData();
+  const status = task.status;
+  const showCancel = status === 'running' || status === 'running-stage';
+  const showRetryResume = status === 'paused' || status === 'blocked' || status === 'failed';
+  if (!showCancel && !showRetryResume) return null;
+  return (
+    <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+      {showCancel && (
+        <ActionButton
+          label="Cancel"
+          cmdType="task.cancel"
+          payload={{ type: 'task.cancel', taskId: task.id }}
+          server={SERVER}
+          send={sendCommandAwait}
+        />
+      )}
+      {showRetryResume && (
+        <>
+          <ActionButton
+            label="Retry"
+            cmdType="task.retry"
+            payload={{ type: 'task.retry', taskId: task.id }}
+            server={SERVER}
+            send={sendCommandAwait}
+            primary
+          />
+          <ActionButton
+            label="Resume"
+            cmdType="task.resume"
+            payload={{ type: 'task.resume', taskId: task.id }}
+            server={SERVER}
+            send={sendCommandAwait}
+          />
+        </>
+      )}
+    </div>
+  );
+};
+
+const ActionButton = ({ label, cmdType, payload, server, send, primary }) => {
+  const [pending, setPending] = React.useState(false);
+  const allowed = isCommandAllowed(cmdType, server);
+  const onClick = async () => {
+    setPending(true);
+    try {
+      await send(payload);
+    } catch {
+      // Toast layer surfaces the failure.
+    } finally {
+      setPending(false);
+    }
+  };
+  const tooltip = !allowed
+    ? (server?.readOnly
+        ? `${cmdType} disabled — server is read-only`
+        : `${cmdType} not supported by this server`)
+    : label;
+  return (
+    <button
+      className={`btn sm${primary ? ' primary' : ''}`}
+      onClick={onClick}
+      disabled={pending || !allowed}
+      title={tooltip}
+    >
+      {pending ? '…' : label}
+    </button>
   );
 };
 

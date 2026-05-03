@@ -27,6 +27,7 @@ type FixtureModule = {
 
 const EXPECTED_SERVER_EVENT_TYPES = [
   "hello",
+  "command.result",
   "project.list",
   "project.state",
   "task.upsert",
@@ -57,6 +58,7 @@ const EXPECTED_CLIENT_COMMAND_TYPES = [
   "task.resume",
   "artifact.fetch",
   "notification.ack",
+  "notification.clearAll",
   "config.get",
   "config.update",
   "config.stages.get",
@@ -127,6 +129,22 @@ const HelloFrameSchema = z
     type: z.literal("hello"),
     version: z.string(),
     project: ProjectSchema.optional(),
+    capabilities: z
+      .object({
+        readOnly: z.boolean(),
+        supportedCommands: z.array(z.string()),
+      })
+      .strict(),
+  })
+  .strict();
+
+const CommandResultFrameSchema = z
+  .object({
+    type: z.literal("command.result"),
+    requestId: z.string(),
+    ok: z.boolean(),
+    message: z.string().optional(),
+    data: z.unknown().optional(),
   })
   .strict();
 
@@ -162,6 +180,9 @@ function validateServerFrame(raw: unknown): string {
   switch (type) {
     case "hello":
       HelloFrameSchema.parse(frame);
+      break;
+    case "command.result":
+      CommandResultFrameSchema.parse(frame);
       break;
     case "project.list":
       ProjectListFrameSchema.parse(frame);
