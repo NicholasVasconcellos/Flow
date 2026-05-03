@@ -2,6 +2,7 @@ import React from 'react';
 import { I } from './icons.jsx';
 import { Panel, StatusBadge, ContextDonut, formatK, formatCost } from './primitives.jsx';
 import { useArtifact } from './useArtifact.js';
+import { fmtRelativeAgo } from './timeUtils.js';
 
 // Log column — renders formatted session log events.
 // Row + detail layout: icon dot, kind label, summary, meta (time).
@@ -724,7 +725,7 @@ function summaryFor(ev, result) {
 function TimestampMeta({ ts, now }) {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return null;
-  const rel = fmtRelative(d.getTime(), now);
+  const rel = fmtRelativeAgo(d.getTime(), now);
   const date = fmtDate(d);
   const time = fmtTime(ts);
   return (
@@ -749,19 +750,6 @@ function fmtTime(ts) {
 
 function fmtDate(d) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-
-function fmtRelative(then, now) {
-  const diff = Math.max(0, now - then);
-  const s = Math.round(diff / 1000);
-  if (s < 5) return 'just now';
-  if (s < 60) return `${s}s ago`;
-  const m = Math.round(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.round(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.round(h / 24);
-  return `${d}d ago`;
 }
 
 function fmtDur(a, b) {

@@ -59,10 +59,10 @@ const TaskDetailsPanel = ({ taskId, openLog, openLogIds = [] }) => {
     <div style={{ padding: "14px 16px", fontSize: 12.5, color: "var(--text-2)" }}>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 10 }}>
         <div style={{ flex: 1 }}>
-          <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-            <StagePill stage={task.stage}/>
-            <StatusBadge status={task.status}/>
-            <span className="mono" style={{ fontSize: 10.5, color: "var(--text-4)", alignSelf: "center" }}>{task.id}</span>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 10, marginBottom: 6 }}>
+            <PillWithLabel label="Stage"><StagePill stage={task.stage}/></PillWithLabel>
+            <PillWithLabel label="Status"><StatusBadge status={task.status}/></PillWithLabel>
+            <span className="mono" style={{ fontSize: 10.5, color: "var(--text-4)", alignSelf: "center", marginLeft: "auto" }}>{task.id}</span>
           </div>
           <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text-1)", letterSpacing: "-0.01em" }}>
             {task.title}
@@ -357,6 +357,16 @@ const ActionButton = ({ label, cmdType, payload, server, send, primary }) => {
     </button>
   );
 };
+
+const PillWithLabel = ({ label, children }) => (
+  <div style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
+    <span style={{
+      fontSize: 9, fontWeight: 600, letterSpacing: "0.08em",
+      color: "var(--text-4)", textTransform: "uppercase",
+    }}>{label}</span>
+    {children}
+  </div>
+);
 
 const FlagChip = ({ on, label }) => (
   <span style={{
