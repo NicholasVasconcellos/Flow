@@ -702,4 +702,4 @@ function StatusFilterButton({ tasks, statusFilter, onChange }) {
   );
 }
 
-export { DAGView };
+export { DAGView, StatusFilterButton };

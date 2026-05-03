@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { I } from './icons.jsx';
 import { Panel } from './primitives.jsx';
 import { DAGView, ALL_STATUSES } from './dag_view.jsx';
+import { ListView } from './list_view.jsx';
 import { LogColumn } from './log_column.jsx';
 import { TaskDetailsPanel } from './task_details.jsx';
 import { ContextChartsPanel, LearningsPanel, NotificationsPanel } from './side_panels.jsx';
@@ -21,6 +22,7 @@ import {
 
 const STORAGE_KEY = "flow.layout.v4";
 const VIEW_MODE_KEY = "flow.dag.viewMode";
+const PANE_VIEW_KEY = "flow.dag.paneView";
 
 function loadLayout() {
   try {
@@ -40,6 +42,12 @@ function loadViewMode() {
     const v = localStorage.getItem(VIEW_MODE_KEY);
     return v === "line" || v === "tree" ? v : "tree";
   } catch { return "tree"; }
+}
+function loadPaneView() {
+  try {
+    const v = localStorage.getItem(PANE_VIEW_KEY);
+    return v === "list" || v === "dag" ? v : "dag";
+  } catch { return "dag"; }
 }
 
 const ProjectScreen = () => {
@@ -94,6 +102,10 @@ const ProjectScreen = () => {
   useEffect(() => {
     try { localStorage.setItem(VIEW_MODE_KEY, viewMode); } catch {}
   }, [viewMode]);
+  const [paneView, setPaneView] = useState(loadPaneView);
+  useEffect(() => {
+    try { localStorage.setItem(PANE_VIEW_KEY, paneView); } catch {}
+  }, [paneView]);
 
   const [closedSessionIds, setClosedSessionIds] = useState(() => new Set());
   const [logCollapsed, setLogCollapsed] = useState({});
@@ -160,32 +172,37 @@ const ProjectScreen = () => {
   // ---- Pane renderers ----
   const runningCount = TASKS.filter(t => t.status === "running").length;
   const paneRenderers = {
-    dag: (dragHandleProps) => (
-      <Panel
-        style={{ flex: 1, minHeight: 0 }}
-        icon={<I.Layout size={13}/>}
-        title="Task DAG"
-        count={TASKS.length}
-        badge={runningCount > 0
-          ? <span className="badge accent" style={{ fontSize: 10 }}>{runningCount} running</span>
-          : null}
-        dragHandleProps={dragHandleProps}
-        collapsed={!!paneCollapsed.dag}
-        onToggleCollapse={() => togglePane("dag")}
-      >
-        <DAGView
-          tasks={TASKS}
-          selectedId={selectedId}
-          onSelect={(id) => { setSelectedId(id); setRightMode("task"); }}
-          hoveredId={hoveredId}
-          onHover={setHoveredId}
-          statusFilter={statusFilter}
-          onChangeStatusFilter={setStatusFilter}
-          viewMode={viewMode}
-          onChangeViewMode={setViewMode}
-        />
-      </Panel>
-    ),
+    dag: (dragHandleProps) => {
+      const viewProps = {
+        tasks: TASKS,
+        selectedId,
+        onSelect: (id) => { setSelectedId(id); setRightMode("task"); },
+        hoveredId,
+        onHover: setHoveredId,
+        statusFilter,
+        onChangeStatusFilter: setStatusFilter,
+      };
+      return (
+        <Panel
+          style={{ flex: 1, minHeight: 0 }}
+          icon={paneView === "list" ? <I.Layout size={13}/> : <I.Layout size={13}/>}
+          title={paneView === "list" ? "Task List" : "Task DAG"}
+          count={TASKS.length}
+          badge={runningCount > 0
+            ? <span className="badge accent" style={{ fontSize: 10 }}>{runningCount} running</span>
+            : null}
+          dragHandleProps={dragHandleProps}
+          collapsed={!!paneCollapsed.dag}
+          onToggleCollapse={() => togglePane("dag")}
+          headerExtra={<PaneViewToggle paneView={paneView} onChange={setPaneView}/>}
+          bodyStyle={paneView === "list" ? { padding: 0 } : undefined}
+        >
+          {paneView === "list"
+            ? <ListView {...viewProps}/>
+            : <DAGView {...viewProps} viewMode={viewMode} onChangeViewMode={setViewMode}/>}
+        </Panel>
+      );
+    },
     sessions: (dragHandleProps) => (
       <SessionsPane
         logSessionIds={logSessionIds}
@@ -830,5 +847,47 @@ const ColumnsGlyph = () => (
     <rect x="8.2" y="1.5" width="2.3" height="9" rx="0.6"/>
   </svg>
 );
+
+const PaneViewToggle = ({ paneView, onChange }) => {
+  const opts = [
+    { id: "dag",  label: "DAG",  title: "Hierarchical dependency graph" },
+    { id: "list", label: "List", title: "Chronological task list" },
+  ];
+  return (
+    <div style={{
+      display: "inline-flex",
+      background: "var(--bg-2)",
+      border: "1px solid var(--border-1)",
+      borderRadius: "var(--r-md)",
+      padding: 2,
+      gap: 1,
+      marginLeft: 8,
+      flexShrink: 0,
+    }}>
+      {opts.map(o => {
+        const active = paneView === o.id;
+        return (
+          <button
+            key={o.id}
+            onClick={() => onChange(o.id)}
+            title={o.title}
+            style={{
+              background: active ? "var(--bg-4)" : "transparent",
+              color: active ? "var(--text-1)" : "var(--text-3)",
+              border: "none",
+              borderRadius: "var(--r-sm)",
+              padding: "3px 10px",
+              fontSize: 11.5,
+              fontWeight: 500,
+              cursor: "pointer",
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+};
 
 export { ProjectScreen };
