@@ -345,6 +345,23 @@ function extractContent(payload) {
   return null;
 }
 
+/**
+ * Synthesize the User log row that mirrors `session.prompt`. The prompt is
+ * passed to the agent via argv `-p`, so it never appears in the streamed
+ * JSONL — this synth is the only path that surfaces it in the log view.
+ * Stable id so reducer branches that both seed it (session.started + the
+ * project.state replay) can dedup against `LOG_EVENTS` by id.
+ */
+function synthPromptEvent(session) {
+  return {
+    id: `evt-${session.id}-prompt`,
+    sessionId: session.id,
+    ts: session.startedAt,
+    kind: 'user',
+    content: session.prompt ?? null,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Stored raw DAG (nodes/edges as strings) for re-joining when tasks change
 // ---------------------------------------------------------------------------
@@ -395,14 +412,26 @@ export function applyEvent(state, frame) {
       }
 
       // Merge sessions from project.state. Replays historical sessions on
-      // (re)connect so the UI doesn't lose them between WS opens. Does NOT
-      // synthesize prompt LOG_EVENTS — that is session.started-only behavior.
+      // (re)connect so the UI doesn't lose them between WS opens. Synthesizes
+      // the User log row from session.prompt with id-based dedup so a later
+      // session.started for the same session does not duplicate it.
       let newSessions = state.SESSIONS;
+      let newLogEvents = state.LOG_EVENTS;
       if (Array.isArray(project.sessions)) {
         newSessions = { ...state.SESSIONS };
         let working = { SESSIONS: newSessions };
+        const existingIds = new Set(state.LOG_EVENTS.map((e) => e.id));
+        const additions = [];
         for (const raw of project.sessions) {
           newSessions[raw.id] = hydrateSession(working, raw);
+          const userEvent = synthPromptEvent(raw);
+          if (!existingIds.has(userEvent.id)) {
+            existingIds.add(userEvent.id);
+            additions.push(userEvent);
+          }
+        }
+        if (additions.length > 0) {
+          newLogEvents = [...state.LOG_EVENTS, ...additions];
         }
       }
 
@@ -465,6 +494,7 @@ export function applyEvent(state, frame) {
         TASKS: newTasks,
         SESSIONS: newSessions,
         SESSIONS_HYDRATED: true,
+        LOG_EVENTS: newLogEvents,
         DAG: dag,
         NOTIFICATIONS: newNotifications,
         NOTIFICATIONS_TRUNCATED: newNotificationsTruncated,
@@ -532,19 +562,17 @@ export function applyEvent(state, frame) {
       const session = hydrateSession(state, raw);
       const newSessions = { ...state.SESSIONS, [id]: session };
 
-      // Synthesize a user LOG_EVENT from the prompt
-      const userEvent = {
-        id: `evt-${id}-prompt`,
-        sessionId: id,
-        ts: raw.startedAt,
-        kind: 'user',
-        content: raw.prompt ?? null,
-      };
+      // Idempotent against project.state replay that already seeded the row.
+      const userEvent = synthPromptEvent(raw);
+      const alreadyHas = state.LOG_EVENTS.some((e) => e.id === userEvent.id);
+      const newLog = alreadyHas
+        ? state.LOG_EVENTS
+        : [...state.LOG_EVENTS, userEvent];
 
       return {
         ...state,
         SESSIONS: newSessions,
-        LOG_EVENTS: [...state.LOG_EVENTS, userEvent],
+        LOG_EVENTS: newLog,
       };
     }
 

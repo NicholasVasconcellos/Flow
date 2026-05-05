@@ -167,6 +167,50 @@ test('11. LOG_EVENTS contains at least one user event', () => {
   assert.ok(userEvents[0].content != null, 'user event should have content');
 });
 
+test('11a. project.state seeds User log row from session.prompt for historical sessions', () => {
+  // Cold-load: project.state arrives carrying a session whose `session.started`
+  // frame the UI never sees. The User row must still appear so the prompt is
+  // visible for sessions that existed before the WS connection opened.
+  const session = {
+    id: 'hist-S1', taskId: 't1', stage: 'spec', provider: 'claude-code',
+    model: 'opus', skillName: 'spec', prompt: 'do the thing', status: 'succeeded',
+    startedAt: '2026-04-30T00:00:00Z',
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, total: 0 },
+    autocompacted: false, costUsd: 0,
+  };
+  const s = applyEvent(initialState, {
+    type: 'project.state',
+    project: { name: 'p', path: '/p', tasks: [], sessions: [session] },
+  });
+  const userEvents = s.LOG_EVENTS.filter(
+    (e) => e.kind === 'user' && e.sessionId === 'hist-S1',
+  );
+  assert.strictEqual(userEvents.length, 1, 'expected one synthesized user row');
+  assert.strictEqual(userEvents[0].content, 'do the thing');
+});
+
+test('11b. session.started after project.state does not duplicate the User row', () => {
+  // project.state seeds the synth, then session.started fires for the same
+  // session id (e.g. mid-run reconnect that re-emits the started frame). The
+  // stable id `evt-${sid}-prompt` must dedup so we end up with exactly one row.
+  const session = {
+    id: 'dup-S1', taskId: null, stage: 'exec', provider: 'claude-code',
+    model: 'opus', skillName: 'exec', prompt: 'P', status: 'running',
+    startedAt: '2026-04-30T00:00:00Z',
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, total: 0 },
+    autocompacted: false, costUsd: 0,
+  };
+  let s = applyEvent(initialState, {
+    type: 'project.state',
+    project: { name: 'p', path: '/p', tasks: [], sessions: [session] },
+  });
+  s = applyEvent(s, { type: 'session.started', session });
+  const userEvents = s.LOG_EVENTS.filter(
+    (e) => e.kind === 'user' && e.sessionId === 'dup-S1',
+  );
+  assert.strictEqual(userEvents.length, 1, 'expected dedup to leave exactly one row');
+});
+
 test('12. notification severity mapping', () => {
   // 18 from live notification frames + 2 inlined via project.state in step 5 = 20:
   //   - error + "paused at" in title -> blocked (16 + 1 inlined = 17)
