@@ -41,7 +41,7 @@ function fmtDuration(startedAt, completedAt) {
   return `${h}h ${rm}m`;
 }
 
-function sortTasks(tasks) {
+export function sortTasks(tasks) {
   // Started tasks first, ordered by startedAt ASC. Unstarted tasks tail,
   // ordered by createdAt ASC.
   return tasks.slice().sort((a, b) => {

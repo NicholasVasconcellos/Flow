@@ -5,6 +5,13 @@ import { I } from './icons.jsx';
 
 export const ALL_STATUSES = ["pending", "ready", "running", "paused", "blocked", "done", "merged"];
 
+// Task-level stages only (excludes session-only stages like setup/get-tasks/commit/
+// merge-resolve/merge-verify which never key a task row).
+export const ALL_TASK_STAGES = [
+  "spec", "exec", "exec_ui_check", "code_review", "code_review_ui_check",
+  "documentation", "update-learning", "done", "merged",
+];
+
 // Longest dependency-path depth from any root, computed over the full task set
 // so rows are stable when the status filter changes a task's visibility.
 function computeDepths(tasks) {
@@ -702,4 +709,101 @@ function StatusFilterButton({ tasks, statusFilter, onChange }) {
   );
 }
 
-export { DAGView, StatusFilterButton };
+function StageFilterButton({ tasks, stageFilter, onChange }) {
+  const [open, setOpen] = React.useState(false);
+  const wrapRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (!wrapRef.current?.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const counts = React.useMemo(() => {
+    const c = {};
+    tasks.forEach(t => { c[t.stage] = (c[t.stage] || 0) + 1; });
+    return c;
+  }, [tasks]);
+
+  const stages = window.FLOW_DATA?.STAGES || {};
+  const totalActive = stageFilter.size;
+  const isAll = totalActive === ALL_TASK_STAGES.length;
+
+  const toggle = (stage) => {
+    const next = new Set(stageFilter);
+    if (next.has(stage)) next.delete(stage); else next.add(stage);
+    onChange(next);
+  };
+  const setAll = (on) => onChange(on ? new Set(ALL_TASK_STAGES) : new Set());
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative", pointerEvents: "auto" }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        title="Filter tasks by stage"
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 5,
+          background: open ? "var(--bg-3)" : "var(--bg-1)",
+          border: "1px solid var(--border-2)",
+          borderRadius: "var(--r-md)",
+          padding: "4px 8px",
+          color: isAll ? "var(--text-3)" : "var(--text-1)",
+          fontSize: 11.5,
+          cursor: "pointer",
+        }}>
+        <I.Filter size={11}/>
+        <span>{isAll ? "Stage" : `${totalActive} of ${ALL_TASK_STAGES.length}`}</span>
+      </button>
+      {open && (
+        <div style={{
+          position: "absolute",
+          top: "calc(100% + 4px)",
+          right: 0,
+          minWidth: 220,
+          background: "var(--bg-2)",
+          border: "1px solid var(--border-2)",
+          borderRadius: "var(--r-md)",
+          boxShadow: "var(--shadow-md)",
+          padding: 6,
+          zIndex: 20,
+          display: "flex", flexDirection: "column", gap: 2,
+        }}>
+          <div style={{ display: "flex", gap: 4, padding: "2px 4px 6px", borderBottom: "1px solid var(--border-1)", marginBottom: 4 }}>
+            <button className="btn sm" onClick={() => setAll(true)} style={{ flex: 1, fontSize: 11 }}>Show all</button>
+            <button className="btn sm" onClick={() => setAll(false)} style={{ flex: 1, fontSize: 11 }}>Hide all</button>
+          </div>
+          {ALL_TASK_STAGES.map(s => {
+            const m = stages[s] || { label: s, color: "var(--text-4)" };
+            const checked = stageFilter.has(s);
+            const count = counts[s] || 0;
+            return (
+              <label key={s} style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "5px 6px",
+                borderRadius: 4,
+                cursor: "pointer",
+                color: checked ? "var(--text-1)" : "var(--text-3)",
+                background: "transparent",
+              }}
+                onMouseEnter={(e) => e.currentTarget.style.background = "var(--bg-3)"}
+                onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggle(s)}
+                  style={{ accentColor: "var(--accent)" }}
+                />
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: m.color, flexShrink: 0 }}/>
+                <span style={{ fontSize: 11.5, flex: 1 }}>{m.label}</span>
+                <span className="mono" style={{ fontSize: 10.5, color: "var(--text-4)" }}>{count}</span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export { DAGView, StatusFilterButton, StageFilterButton };

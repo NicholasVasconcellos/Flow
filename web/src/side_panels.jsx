@@ -3,47 +3,89 @@ import { I } from './icons.jsx';
 import { StagePill, ContextDonut, formatK, formatCost } from './primitives.jsx';
 import { useFlowData } from './FlowDataContext.jsx';
 import { useArtifact } from './useArtifact.js';
+import { sortTasks } from './list_view.jsx';
+import { StageFilterButton, ALL_TASK_STAGES } from './dag_view.jsx';
 
 // Context Charts, Learnings, Notifications panels
 
 const ContextChartsPanel = () => {
   const { TASKS, SESSIONS } = useFlowData();
-  const rows = TASKS.filter(t => SESSIONS.some(s => s.taskId === t.id)).slice(0, 6);
-  // include all tasks with sessions; augment others with fake sessions for demo richness
-  const allRows = TASKS.slice(0, 8).map(t => {
-    let sessions = SESSIONS.filter(s => s.taskId === t.id);
-    if (sessions.length === 0) {
-      // synthesize light demo session data
-      const seed = t.id.charCodeAt(1) * 13 + t.id.length * 7;
-      const n = 1 + (seed % 3);
-      sessions = Array.from({ length: n }).map((_, i) => ({
-        id: `${t.id}-demo-${i}`,
-        name: `${t.stage}:run-${i+1}`,
-        model: "sonnet-4.5",
-        contextUsed: 20_000 + ((seed * (i+1)) % 160_000),
-        contextMax: 200_000,
-        tokens: { input: 8000 + ((seed*i)%40_000), output: 2000 + ((seed+i)%12_000), cacheRead: 30_000 + ((seed*i)%80_000), cacheWrite: 4000 },
-        cost: 0.10 + ((seed*(i+1))%120)/100,
-        autocompacted: seed % 5 === 0 && i === n-1,
-      }));
-    }
-    return { task: t, sessions };
-  });
+  const [search, setSearch] = React.useState("");
+  const [stageFilter, setStageFilter] = React.useState(() => new Set(ALL_TASK_STAGES));
 
-  // Totals
-  const totals = allRows.reduce((acc, r) => {
+  const sessionsByTask = React.useMemo(() => {
+    const m = new Map();
+    SESSIONS.forEach(s => {
+      if (!m.has(s.taskId)) m.set(s.taskId, []);
+      m.get(s.taskId).push(s);
+    });
+    return m;
+  }, [SESSIONS]);
+
+  const sorted = React.useMemo(() => sortTasks(TASKS), [TASKS]);
+  const visible = React.useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return sorted.filter(t => {
+      if (!stageFilter.has(t.stage)) return false;
+      if (!q) return true;
+      return (t.title || "").toLowerCase().includes(q)
+          || (t.id || "").toLowerCase().includes(q);
+    });
+  }, [sorted, stageFilter, search]);
+
+  const visibleRows = React.useMemo(
+    () => visible.map(t => ({ task: t, sessions: sessionsByTask.get(t.id) || [] })),
+    [visible, sessionsByTask],
+  );
+
+  const totals = React.useMemo(() => visibleRows.reduce((acc, r) => {
     r.sessions.forEach(s => {
-      acc.input += s.tokens.input;
-      acc.output += s.tokens.output;
-      acc.cacheRead += s.tokens.cacheRead;
-      acc.cacheWrite += s.tokens.cacheWrite;
+      const tk = s.tokens || {};
+      acc.input += tk.input || 0;
+      acc.output += tk.output || 0;
+      acc.cacheRead += tk.cacheRead || 0;
+      acc.cacheWrite += tk.cacheWrite || 0;
       acc.cost += (s.costUsd ?? s.cost ?? 0);
     });
     return acc;
-  }, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
+  }, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }), [visibleRows]);
+
+  const stages = window.FLOW_DATA?.STAGES || {};
 
   return (
     <div style={{ padding: 0 }}>
+      <div style={{
+        display: "flex", alignItems: "center", gap: 8,
+        padding: "10px 12px",
+        borderBottom: "1px solid var(--border-1)",
+        background: "var(--bg-0)",
+      }}>
+        <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
+          <span style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: "var(--text-4)", display: "inline-flex" }}>
+            <I.Search size={12}/>
+          </span>
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search tasks…"
+            style={{
+              width: "100%",
+              padding: "5px 8px 5px 26px",
+              background: "var(--bg-1)",
+              border: "1px solid var(--border-2)",
+              borderRadius: "var(--r-md)",
+              color: "var(--text-1)",
+              fontSize: 11.5,
+              outline: "none",
+            }}
+          />
+        </div>
+        <StageFilterButton tasks={TASKS} stageFilter={stageFilter} onChange={setStageFilter}/>
+        <div style={{ fontSize: 11, color: "var(--text-3)", whiteSpace: "nowrap" }}>
+          {visible.length} of {TASKS.length}
+        </div>
+      </div>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
         <thead>
           <tr style={{ background: "var(--bg-2)", color: "var(--text-3)", fontWeight: 500, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>
@@ -54,9 +96,17 @@ const ContextChartsPanel = () => {
           </tr>
         </thead>
         <tbody>
-          {allRows.map(({ task, sessions }) => {
-            const tokTotal = sessions.reduce((a, s) => a + s.tokens.input + s.tokens.output, 0);
-            const cacheTotal = sessions.reduce((a, s) => a + s.tokens.cacheRead + s.tokens.cacheWrite, 0);
+          {visibleRows.length === 0 && (
+            <tr>
+              <td colSpan={4} style={{ padding: "20px 12px", textAlign: "center", color: "var(--text-4)", fontSize: 12 }}>
+                No tasks match
+              </td>
+            </tr>
+          )}
+          {visibleRows.map(({ task, sessions }) => {
+            const hasSessions = sessions.length > 0;
+            const tokTotal = sessions.reduce((a, s) => a + ((s.tokens?.input || 0) + (s.tokens?.output || 0)), 0);
+            const cacheTotal = sessions.reduce((a, s) => a + ((s.tokens?.cacheRead || 0) + (s.tokens?.cacheWrite || 0)), 0);
             const costTotal = sessions.reduce((a, s) => a + (s.costUsd ?? s.cost ?? 0), 0);
             return (
               <tr key={task.id} style={{ borderBottom: "1px solid var(--border-1)" }}>
@@ -70,40 +120,59 @@ const ContextChartsPanel = () => {
                   </div>
                 </td>
                 <td style={{ padding: "10px 8px" }}>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {sessions.map(s => (
-                      <div key={s.id} title={`${s.name} — ${Math.round(s.contextUsed/s.contextMax*100)}%`}>
-                        <ContextDonut used={s.contextUsed} max={s.contextMax} size={34} stroke={4} showLabel={false} autocompacted={s.autocompacted}/>
-                      </div>
-                    ))}
-                  </div>
+                  {hasSessions ? (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {sessions.map(s => {
+                        const stageLabel = stages[s.stage]?.label ?? s.stage;
+                        const pct = s.contextMax ? Math.round((s.contextUsed / s.contextMax) * 100) : 0;
+                        return (
+                          <div key={s.id} title={`${stageLabel} · ${s.name} · ${pct}%`}>
+                            <ContextDonut used={s.contextUsed} max={s.contextMax} size={34} stroke={4} showLabel={false} autocompacted={s.autocompacted}/>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <span style={{ color: "var(--text-4)" }}>—</span>
+                  )}
                 </td>
                 <td style={{ padding: "10px 8px", textAlign: "right", verticalAlign: "middle" }}>
-                  <div className="mono" style={{ color: "var(--text-1)", fontSize: 12 }}>{formatK(tokTotal)}</div>
-                  <div className="mono" style={{ color: "var(--text-4)", fontSize: 10 }}>+{formatK(cacheTotal)} cache</div>
+                  {hasSessions ? (
+                    <>
+                      <div className="mono" style={{ color: "var(--text-1)", fontSize: 12 }}>{formatK(tokTotal)}</div>
+                      <div className="mono" style={{ color: "var(--text-4)", fontSize: 10 }}>+{formatK(cacheTotal)} cache</div>
+                    </>
+                  ) : (
+                    <span style={{ color: "var(--text-4)" }}>—</span>
+                  )}
                 </td>
                 <td style={{ padding: "10px 12px", textAlign: "right", verticalAlign: "middle" }}>
-                  <span className="mono" style={{ color: "var(--text-1)", fontSize: 12 }}>{formatCost(costTotal)}</span>
+                  {hasSessions ? (
+                    <span className="mono" style={{ color: "var(--text-1)", fontSize: 12 }}>{formatCost(costTotal)}</span>
+                  ) : (
+                    <span style={{ color: "var(--text-4)" }}>—</span>
+                  )}
                 </td>
               </tr>
             );
           })}
-          {/* Total row */}
-          <tr style={{ background: "var(--bg-2)" }}>
-            <td style={{ padding: "10px 12px", fontWeight: 600, color: "var(--text-1)", fontSize: 11.5 }}>
-              Σ All tasks
-            </td>
-            <td style={{ padding: "10px 8px", color: "var(--text-3)", fontSize: 11 }}>—</td>
-            <td style={{ padding: "10px 8px", textAlign: "right" }}>
-              <div className="mono" style={{ color: "var(--text-1)", fontSize: 12, fontWeight: 600 }}>{formatK(totals.input + totals.output)}</div>
-              <div className="mono" style={{ color: "var(--text-4)", fontSize: 10 }}>
-                in {formatK(totals.input)} · out {formatK(totals.output)} · cache {formatK(totals.cacheRead + totals.cacheWrite)}
-              </div>
-            </td>
-            <td style={{ padding: "10px 12px", textAlign: "right" }}>
-              <span className="mono" style={{ color: "var(--accent)", fontSize: 13, fontWeight: 600 }}>{formatCost(totals.cost)}</span>
-            </td>
-          </tr>
+          {visibleRows.length > 0 && (
+            <tr style={{ background: "var(--bg-2)" }}>
+              <td style={{ padding: "10px 12px", fontWeight: 600, color: "var(--text-1)", fontSize: 11.5 }}>
+                Σ All tasks
+              </td>
+              <td style={{ padding: "10px 8px", color: "var(--text-3)", fontSize: 11 }}>—</td>
+              <td style={{ padding: "10px 8px", textAlign: "right" }}>
+                <div className="mono" style={{ color: "var(--text-1)", fontSize: 12, fontWeight: 600 }}>{formatK(totals.input + totals.output)}</div>
+                <div className="mono" style={{ color: "var(--text-4)", fontSize: 10 }}>
+                  in {formatK(totals.input)} · out {formatK(totals.output)} · cache {formatK(totals.cacheRead + totals.cacheWrite)}
+                </div>
+              </td>
+              <td style={{ padding: "10px 12px", textAlign: "right" }}>
+                <span className="mono" style={{ color: "var(--accent)", fontSize: 13, fontWeight: 600 }}>{formatCost(totals.cost)}</span>
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>
