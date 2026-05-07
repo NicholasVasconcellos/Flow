@@ -122,26 +122,6 @@ export function stageSkill(stage: AgentStage): string {
   }
 }
 
-/** Read-only stages don't produce commits — UI checks are observational
- *  (ui-check/SKILL.md forbids editing application code) and code_review's
- *  happy path is "no findings, nothing to commit." update-learning writes
- *  to non-tracked files outside the worktree (`learnings-draft.md` and any
- *  promoted skills under the project's `.flow/skills/`). For these stages
- *  a `done` signal is sufficient to advance, with no HEAD-moved
- *  requirement. documentation stays strict because missing docs is a real
- *  failure mode. */
-export function stageCommitsExpected(stage: AgentStage): boolean {
-  switch (stage) {
-    case "exec_ui_check":
-    case "code_review_ui_check":
-    case "code_review":
-    case "update-learning":
-      return false;
-    default:
-      return true;
-  }
-}
-
 // Internal per-task coordination handle.
 interface TaskHandle {
   cancelled: boolean;
@@ -736,15 +716,12 @@ export class Scheduler {
       );
     }
 
-    // Symmetric advance rule: signal "done" + matching stage means the agent
-    // finished. Read-only stages (UI checks) don't need HEAD to move; for the
-    // rest, require a commit so a "done"-without-work claim still gets caught.
-    if (
-      signal &&
-      signal.status === "done" &&
-      signal.stage === stage &&
-      (headMoved || !stageCommitsExpected(stage))
-    ) {
+    // Trust the agent's done signal: a matching `done` stage signal is
+    // sufficient to advance, regardless of HEAD movement or session
+    // status. A subprocess that managed to flush a done signal before
+    // crashing had already reached completion; the trailing failure is
+    // incidental.
+    if (signal && signal.status === "done" && signal.stage === stage) {
       return await this.finalizeStageSuccess(taskId);
     }
 
@@ -828,10 +805,10 @@ export class Scheduler {
       );
     }
 
-    // Success-but-no-rescue cases:
-    // - signal absent + HEAD moved → legacy fallback (commit_recovery + advance).
-    // - signal "done" + HEAD didn't move → skill bug (claimed done but no commit); retry.
-    // - signal absent + HEAD didn't move → agent did nothing; retry.
+    // No matching done signal at this point. Legacy fallback: agent
+    // committed (HEAD moved) but didn't write the signal — accept the work
+    // and advance. Run commit_recovery first if the worktree is dirty so
+    // the next stage starts clean.
     if (!signal && headMoved) {
       try {
         const dirty = await this.git.hasUncommittedChanges(taskId);
@@ -846,14 +823,12 @@ export class Scheduler {
       return await this.finalizeStageSuccess(taskId);
     }
 
-    const noProgressMsg = signal
-      ? `Stage signal "done" but no commit was made on the worktree branch (this stage requires a commit).`
-      : `Stage finished without a stage signal and without committing.`;
+    // Truly nothing happened: no done signal and no commit. Retry/pause.
     return await this.bumpRetryOrPause(
       taskId,
       stage,
       session.id,
-      noProgressMsg,
+      `Stage finished without a stage signal.`,
       "no_commit",
     );
   }

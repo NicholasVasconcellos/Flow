@@ -166,13 +166,12 @@ export function resolveStageConfig(config: Config, stage: StageKey): StageConfig
 }
 
 /**
- * Per-model effort tier table. Today the CLI doesn't expose `--effort`
- * directly, so each tier maps to a thinking-budget keyword that gets injected
- * into the prompt preamble. Centralizing the mapping keeps tuning to one
- * file.
+ * Per-model effort tier table. The CLI now accepts `--effort` directly, so
+ * effort is forwarded as a flag instead of being injected into the prompt.
+ * `thinkingMode` is retained as session metadata for the UI.
  */
 export interface EffortResolved {
-  /** Thinking-budget keyword to inject into the prompt preamble. */
+  /** Resolved thinking-budget keyword (UI metadata only — not injected). */
   thinkingMode: ThinkingMode;
 }
 

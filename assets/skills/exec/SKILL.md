@@ -119,7 +119,7 @@ If browser tests reveal a bug, fix the implementation and re-run both unit and b
 
 All tests for this task pass (unit, plus browser/UI if applicable). Then:
 
-1. `git add -A && git commit -m "<imperative subject ≤72 chars>"` (body bullets per meaningful change encouraged).
+1. `git add -A && git commit -m "<imperative subject ≤72 chars>"` (body bullets per meaningful change encouraged; skip the commit if no files actually changed).
 2. Write the stage signal:
    `echo '{"stage":"<stage>","status":"done"}' > <stage signal path from Workspace>`
-   (substitute the stage from the Workspace block; use `"status":"blocked","reason":"…"` if you cannot proceed).
+   (substitute `<stage>` with the value of the Workspace block's `stage:` field; use `"status":"blocked","reason":"…"` if you cannot proceed).

@@ -161,6 +161,7 @@ export async function composePrompt(
     const learningsDraftPath = deps.paths.taskLearningsDraft(args.taskId);
     const lines = [
       "# Workspace",
+      `stage:             ${args.stage}`,
       `cwd:               ${args.worktreePath}`,
       `stage signal:      ${stageSignalPath}`,
       `progress.txt:      ${progressPath}`,
@@ -917,6 +918,7 @@ export class AgentRunner {
       prompt,
       model,
       sessionId: claudeSessionId,
+      effort,
     });
 
     const jsonlPath = this.paths.sessionJsonl(args.taskId, sessionId);
@@ -1526,6 +1528,7 @@ export function buildClaudeArgv(opts: {
   prompt: string;
   model: string;
   sessionId?: string;
+  effort?: Effort;
 }): string[] {
   const argv = [
     "-p",
@@ -1538,6 +1541,11 @@ export function buildClaudeArgv(opts: {
     "--verbose",
     "--dangerously-skip-permissions",
   ];
+  if (opts.effort) {
+    // Flow's `med` tier maps to the CLI's `medium`; other tiers match 1:1.
+    const cliEffort = opts.effort === "med" ? "medium" : opts.effort;
+    argv.push("--effort", cliEffort);
+  }
   if (opts.sessionId) {
     argv.push("--session-id", opts.sessionId);
   }

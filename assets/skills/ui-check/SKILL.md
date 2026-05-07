@@ -169,4 +169,4 @@ do not edit application code yourself. Then:
 1. If the round file or any in-worktree artifact was written, `git add -A && git commit -m "<imperative subject ≤72 chars>"`. If nothing in-worktree changed, skip the commit.
 2. Write the stage signal:
    `echo '{"stage":"<stage>","status":"done"}' > <stage signal path from Workspace>`
-   (substitute the stage — `exec_ui_check` or `code_review_ui_check` — from the Workspace block; use `"status":"blocked","reason":"…"` only if every interaction was unverifiable).
+   (substitute `<stage>` with the value of the Workspace block's `stage:` field — it will be either `exec_ui_check` or `code_review_ui_check`; use `"status":"blocked","reason":"…"` only if every interaction was unverifiable).

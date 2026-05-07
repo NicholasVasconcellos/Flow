@@ -244,6 +244,29 @@ test("composePrompt does not inline a stage-protocol block (each SKILL.md owns i
   }
 });
 
+test("composePrompt Workspace block includes stage: field for both ui-check stages", async () => {
+  const root = await mkTmp();
+  const paths = new Paths(root);
+  await writeSkill(paths, "ui-check", "SKILL BODY");
+
+  for (const stage of ["exec_ui_check", "code_review_ui_check"] as const) {
+    const prompt = await composePrompt(
+      { paths },
+      {
+        taskId: "T1",
+        stage,
+        skillName: "ui-check",
+        worktreePath: root,
+      },
+    );
+    assert.match(
+      prompt,
+      new RegExp(`# Workspace[\\s\\S]*?stage:\\s+${stage}\\b`),
+      `${stage}: Workspace block must include the stage name as a structured field`,
+    );
+  }
+});
+
 test("composePrompt only emits Learnings block for LEARNINGS_DRAFT stages", async () => {
   const root = await mkTmp();
   const paths = new Paths(root);

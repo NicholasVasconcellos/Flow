@@ -765,6 +765,52 @@ test(
   },
 );
 
+test(
+  "signal=done is sufficient to advance — commit is not required",
+  { timeout: 10000 },
+  async () => {
+    // Simplified contract: trust the agent's done signal. An exec-only
+    // task whose agent writes done without committing should advance,
+    // regardless of HEAD movement or worktree cleanliness. No
+    // commit_recovery, no no_commit pause.
+    const h = await makeHarness({
+      taskDefs: [
+        mkTaskDef("A", {
+          hasSpec: false,
+          hasUI: false,
+          hasCodeReview: false,
+        }),
+      ],
+      config: { hasDocs: false },
+      gitOpts: {
+        hasUncommittedChanges: false,
+        // Force the rev-list rescue to also report no commits.
+        commitsAheadFn: () => 0,
+      },
+    });
+
+    // Default agent writes the done signal but we disable the HEAD bump
+    // to simulate "agent forgot the git commit step entirely".
+    h.agent.setHeadBumpFn(null);
+
+    const t = await h.scheduler.runTask("A");
+
+    assert.notEqual(
+      t.status,
+      "paused",
+      "task must advance on a done signal alone",
+    );
+    const recoveries = h.agent.calls.filter(
+      (c) => c.stage === "commit_recovery",
+    );
+    assert.equal(
+      recoveries.length,
+      0,
+      "no commit_recovery should run when signal=done — trust the signal",
+    );
+  },
+);
+
 // ---------------------------------------------------------------------------
 // recoverStaleTasks (unchanged behaviour)
 // ---------------------------------------------------------------------------
@@ -917,9 +963,13 @@ test(
 // ---------------------------------------------------------------------------
 
 test(
-  "stage rescued when failed session left a 'done' signal AND HEAD moved",
+  "done signal advances stage even when session ended in failure (signal trumps trailing crash)",
   { timeout: 10000 },
   async () => {
+    // Agent wrote the done signal, then the wrapper process stalled on a
+    // trailing tool call and got SIGTERMed. The signal indicates the work
+    // was finished before the crash — trust it and advance, regardless of
+    // HEAD movement.
     let specCalls = 0;
     const h = await makeHarness({
       taskDefs: [mkTaskDef("A")],
@@ -927,8 +977,6 @@ test(
       agentScript: async (call) => {
         if (call.stage === "spec" && call.taskId) {
           specCalls += 1;
-          // Simulate the bug: agent wrote signal + committed, then the wrapper
-          // process stalled on a trailing tool call and got SIGTERMed.
           const file = h.paths.taskStageSignal(call.taskId);
           await fs.mkdir(path.dirname(file), { recursive: true });
           await fs.writeFile(
@@ -936,8 +984,8 @@ test(
             JSON.stringify({ stage: "spec", status: "done" }),
             "utf8",
           );
-          // Simulate the commit by bumping HEAD.
-          h.git.bumpHead(call.taskId);
+          // Deliberately do NOT bump HEAD — the new contract advances
+          // on signal alone, no commit required.
           return {
             status: "failed",
             error: "Stall: no assistant progress for 180000ms",
@@ -947,48 +995,12 @@ test(
         return {};
       },
     });
+    h.agent.setHeadBumpFn(null);
 
     const t = await h.scheduler.runTask("A");
     assert.equal(t.status, "merged");
     assert.equal(specCalls, 1);
-    // No retry was needed because the rescue rule treated spec as done.
     assert.equal(t.retries, 0);
-  },
-);
-
-test(
-  "stage NOT rescued when 'done' signal but HEAD did not move",
-  { timeout: 10000 },
-  async () => {
-    const h = await makeHarness({
-      taskDefs: [mkTaskDef("A")],
-      config: { retryCount: 0 },
-      agentScript: async (call) => {
-        if (call.stage === "spec" && call.taskId) {
-          // Skill bug: wrote the signal but never committed.
-          const file = h.paths.taskStageSignal(call.taskId);
-          await fs.mkdir(path.dirname(file), { recursive: true });
-          await fs.writeFile(
-            file,
-            JSON.stringify({ stage: "spec", status: "done" }),
-            "utf8",
-          );
-          // No bumpHead — HEAD stays where it was.
-          return {
-            status: "failed",
-            error: "Stall: no assistant progress for 180000ms",
-            exitCode: 1,
-          };
-        }
-        return {};
-      },
-    });
-    // Disable the default head bump so the agent's failure run leaves HEAD untouched.
-    h.agent.setHeadBumpFn(null);
-
-    const t = await h.scheduler.runTask("A");
-    assert.equal(t.status, "paused");
-    assert.equal(t.stage, "spec");
   },
 );
 
