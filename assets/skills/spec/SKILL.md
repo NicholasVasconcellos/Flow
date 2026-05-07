@@ -23,9 +23,25 @@ From the task criteria. Extract every acceptance criterion as a discrete, verifi
 
 ## Step 2 — Detect the test framework
 
-Detect the runner from the project's manifest / config. Reuse it; do not
-add a new test dependency. Identify the import style, assertion library
-(if separate), where test files live, and the naming convention.
+Reuse the project's existing test framework; do not add a new test
+dependency. Identify the runner, import style, assertion library, where
+test files live, and the naming convention.
+
+**Read the project's testing reference first.** Check the project root
+for one of:
+
+- `docs/testing.md`
+- `tests/README.md`
+- `TESTING.md`
+- a Testing section in `AGENTS.md`
+
+If any exists, treat it as the source of truth for invocation, file
+naming, assertion API, and fixture patterns. Do not re-derive these by
+grepping the test directory or scanning addons.
+
+If no testing reference exists, fall back to detecting the runner from
+the project's manifest / config and a quick scan of one existing test
+file.
 
 ## Step 3 — Plan test cases
 

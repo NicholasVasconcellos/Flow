@@ -31,6 +31,19 @@ acceptance criteria, do not guess — emit
 `FLOW_BLOCKED: round-<N> issue conflicts with task acceptance — <one-sentence summary>`
 and stop.
 
+## Project test framework (read before touching tests)
+
+If this task involves writing, modifying, or verifying tests:
+
+1. Check the project root for a testing reference. Typical paths:
+   `docs/testing.md`, `tests/README.md`, `TESTING.md`.
+2. Read it before opening test files. It covers framework invocation,
+   file naming, assertion API, and fixture patterns — do not re-derive
+   these by grepping the test directory or scanning addons.
+3. If no dedicated reference exists, read `AGENTS.md` for a Testing
+   section. If neither exists, proceed to Step 1 and rely on the test
+   files themselves.
+
 ## Step 1 — Read the tests
 
 Open every test file for this task. Read each test case. Understand exactly what the tests expect: inputs, outputs, side effects, error conditions. The tests are the source of truth for what "done" means.
