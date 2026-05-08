@@ -23,6 +23,7 @@ src/
   overnightSupervisor.ts — Parent supervisor that respawns dead overnight workers
   paths.ts             — Centralised .flow/* path resolution
   scheduler.ts         — Drives ready tasks through the per-stage lifecycle
+  sessionTail.ts       — Per-session JSONL tail (chokidar) for read-only Flow
   setup.ts             — `init` flow; bundled-skill sync; plan.md watcher
   state.ts             — StateStore for .flow/state.json (tasks + sessions)
   types.ts             — Zod schemas + types: Task, Session, Config, Events, etc.

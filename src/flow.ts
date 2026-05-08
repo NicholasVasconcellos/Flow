@@ -23,6 +23,7 @@ import {
 import { buildDag as buildDagFromTasks } from "./dag.js";
 import { newId } from "./ids.js";
 import { ProjectArtifacts, toSessionEvent } from "./artifacts.js";
+import { SessionTailer } from "./sessionTail.js";
 import type {
   Config,
   Dag,
@@ -134,6 +135,10 @@ class FlowImpl implements Flow {
   private readonly assetsDir: string;
   private readonly gitRemote: string | null;
   private readonly readOnly: boolean;
+  /** Live JSONL tailer for per-session event streams. Constructed only in
+   *  read-only mode (`flow serve`) — in writer mode the agent emits events
+   *  directly onto the in-process bus, so disk tail would double-emit. */
+  private readonly sessionTailer: SessionTailer | null;
   private watchDispose: (() => void) | null = null;
   private stopped = false;
 
@@ -162,6 +167,14 @@ class FlowImpl implements Flow {
     this.gitRemote = opts.gitRemote;
     this.readOnly = opts.readOnly ?? false;
     this.artifacts = new ProjectArtifacts(opts.paths, opts.state);
+    this.sessionTailer = this.readOnly
+      ? new SessionTailer(opts.paths, opts.eventBus)
+      : null;
+    // Initial sweep — any session already running in the loaded state needs a
+    // tailer immediately, before refreshFromDisk fires on the next mtime tick.
+    if (this.sessionTailer) {
+      this.sessionTailer.reconcile(this.state.getSessions());
+    }
   }
 
   // --- lifecycle ---------------------------------------------------------
@@ -316,6 +329,9 @@ class FlowImpl implements Flow {
       this.watchDispose = null;
     }
     this.scheduler.cancel();
+    if (this.sessionTailer) {
+      void this.sessionTailer.dispose();
+    }
   }
 
   /** Graceful shutdown for the SIGINT/SIGTERM path: stop accepting new work,
@@ -359,9 +375,21 @@ class FlowImpl implements Flow {
 
   async refreshFromDisk(): Promise<void> {
     const result = await this.state.reloadFromDiskIfChanged();
-    if (!result || result.changed.length === 0) return;
-    for (const t of result.changed) {
+    if (!result) return;
+    for (const t of result.tasks) {
       this.eventBus.emit("task.upsert", { task: { ...t } });
+    }
+    for (const s of result.sessions.started) {
+      this.eventBus.emit("session.started", { session: { ...s } });
+    }
+    for (const s of result.sessions.updated) {
+      this.eventBus.emit("session.updated", { session: { ...s } });
+    }
+    for (const s of result.sessions.ended) {
+      this.eventBus.emit("session.ended", { session: { ...s } });
+    }
+    if (this.sessionTailer) {
+      this.sessionTailer.reconcile(this.state.getSessions());
     }
   }
 

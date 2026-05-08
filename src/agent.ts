@@ -902,6 +902,16 @@ export class AgentRunner {
 
     this.eventBus.emit("session.started", { session: { ...session } });
 
+    // Persist into state.json so a co-resident reader (`flow serve`) sees the
+    // in-progress session via mtime-poll diff. Without this, the session row
+    // only lands on disk after spawnAgent returns at end-of-stage.
+    if (this.state) {
+      this.state.upsertSession({ ...session });
+      void this.state.save().catch(() => {
+        /* best-effort — disk write failures don't tear down the session */
+      });
+    }
+
     // Persist a partial `.meta.json` so a mid-session crash leaves enough
     // forensic state (id, taskId, stage, startedAt) to reconstruct what the
     // session was attempting. Awaited so it can't race with the final write.
@@ -1010,6 +1020,15 @@ export class AgentRunner {
       session.tokens = { ...tokens, total };
       session.costUsd = costFor(this.config, model, session.tokens);
       this.eventBus.emit("session.updated", { session: { ...session } });
+      // Mirror to state.json so a sibling reader (`flow serve`) picks up token
+      // and contextPercentage ticks via mtime-poll diff. Already throttled by
+      // UPDATE_THROTTLE_MS (1Hz). Fire-and-forget — never block the stream loop.
+      if (this.state) {
+        this.state.upsertSession({ ...session });
+        void this.state.save().catch(() => {
+          /* best-effort */
+        });
+      }
     };
 
     try {
@@ -1417,6 +1436,19 @@ export class AgentRunner {
       );
     } catch {
       /* ignore meta write errors */
+    }
+
+    // Persist final session state to state.json so a sibling reader sees the
+    // status transition (running → succeeded/failed/etc.) before the scheduler
+    // re-saves at end-of-stage. Awaited so the bus event and the disk row
+    // can't drift relative to each other.
+    if (this.state) {
+      this.state.upsertSession({ ...session });
+      try {
+        await this.state.save();
+      } catch {
+        /* best-effort */
+      }
     }
 
     this.eventBus.emit("session.ended", { session: { ...session } });

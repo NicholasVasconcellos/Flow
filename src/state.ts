@@ -59,11 +59,13 @@ export class StateStore {
   /** Re-read state.json from disk if its mtime has advanced since the last
    *  load/save. Used by `flow serve` (read-only transport) to surface
    *  mutations made by a sibling driver (`run-all`, `overnight`). Returns
-   *  the diff of tasks whose runtime fields changed, or `null` if disk is
-   *  unchanged. Sessions are intentionally not diffed — UI relies on the
-   *  bus event stream for per-session updates while the orchestrator is
-   *  alive, and on cold-load via `project.state` after a reconnect. */
-  async reloadFromDiskIfChanged(): Promise<{ changed: TaskRuntime[] } | null> {
+   *  the diff of tasks whose runtime fields changed plus a session-lifecycle
+   *  diff bucketed into started / updated / ended, or `null` if disk is
+   *  unchanged. */
+  async reloadFromDiskIfChanged(): Promise<{
+    tasks: TaskRuntime[];
+    sessions: { started: Session[]; updated: Session[]; ended: Session[] };
+  } | null> {
     let stat;
     try {
       stat = await fs.stat(this.paths.stateJson);
@@ -74,17 +76,43 @@ export class StateStore {
     const raw = await readJsonIfExists<unknown>(this.paths.stateJson);
     if (raw === null) return null;
     const fresh = StateSchema.parse(raw);
-    const prevById = new Map(this.state.tasks.map((t) => [t.id, t] as const));
-    const changed: TaskRuntime[] = [];
+
+    const prevTaskById = new Map(this.state.tasks.map((t) => [t.id, t] as const));
+    const tasks: TaskRuntime[] = [];
     for (const t of fresh.tasks) {
-      const prev = prevById.get(t.id);
+      const prev = prevTaskById.get(t.id);
       if (!prev || JSON.stringify(prev) !== JSON.stringify(t)) {
-        changed.push(t);
+        tasks.push(t);
       }
     }
+
+    const prevSessionById = new Map(
+      this.state.sessions.map((s) => [s.id, s] as const),
+    );
+    const sessions = {
+      started: [] as Session[],
+      updated: [] as Session[],
+      ended: [] as Session[],
+    };
+    for (const s of fresh.sessions) {
+      const prev = prevSessionById.get(s.id);
+      if (!prev) {
+        sessions.started.push(s);
+        continue;
+      }
+      if (JSON.stringify(prev) === JSON.stringify(s)) continue;
+      const wasRunning = prev.status === "running";
+      const stillRunning = s.status === "running";
+      if (wasRunning && !stillRunning) {
+        sessions.ended.push(s);
+      } else {
+        sessions.updated.push(s);
+      }
+    }
+
     this.state = fresh;
     this.lastLoadedMtimeMs = stat.mtimeMs;
-    return { changed };
+    return { tasks, sessions };
   }
 
   getTasks(): TaskRuntime[] {

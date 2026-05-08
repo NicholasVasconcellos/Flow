@@ -254,12 +254,84 @@ test("reloadFromDiskIfChanged surfaces external task mutations", async () => {
 
   const result = await reader.reloadFromDiskIfChanged();
   assert.ok(result, "expected a diff after sibling write");
-  assert.equal(result.changed.length, 1);
-  assert.equal(result.changed[0]!.id, "A");
-  assert.equal(result.changed[0]!.status, "running");
+  assert.equal(result.tasks.length, 1);
+  assert.equal(result.tasks[0]!.id, "A");
+  assert.equal(result.tasks[0]!.status, "running");
+  assert.equal(result.sessions.started.length, 0);
+  assert.equal(result.sessions.updated.length, 0);
+  assert.equal(result.sessions.ended.length, 0);
   assert.equal(reader.getTask("A")!.status, "running");
 
   // Idempotent — second poll with no further writes returns null.
   const second = await reader.reloadFromDiskIfChanged();
   assert.equal(second, null);
+});
+
+test("reloadFromDiskIfChanged buckets session lifecycle changes", async () => {
+  const root = await mkTmp();
+  const paths = new Paths(root);
+  const writer = new StateStore(paths);
+  await writer.load();
+  await writer.save();
+
+  const reader = new StateStore(paths);
+  await reader.load();
+
+  // Writer adds a brand-new running session.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  writer.upsertSession({
+    id: "s1",
+    taskId: "A",
+    stage: "exec",
+    provider: "claude-code",
+    model: "claude-sonnet-4-6",
+    effort: "med",
+    ordinal: 1,
+    skillName: "exec",
+    prompt: "p",
+    status: "running",
+    startedAt: new Date().toISOString(),
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, total: 0 },
+    autocompacted: false,
+    costUsd: 0,
+    claudeSessionId: "00000000-0000-0000-0000-000000000001",
+  });
+  await writer.save();
+
+  let r = await reader.reloadFromDiskIfChanged();
+  assert.ok(r, "expected diff after new session");
+  assert.equal(r.sessions.started.length, 1);
+  assert.equal(r.sessions.started[0]!.id, "s1");
+  assert.equal(r.sessions.updated.length, 0);
+  assert.equal(r.sessions.ended.length, 0);
+
+  // Writer ticks token totals — should bucket as `updated`.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const s = writer.getSession("s1")!;
+  s.tokens = { input: 100, output: 50, cacheRead: 0, cacheCreate: 0, total: 150 };
+  writer.upsertSession(s);
+  await writer.save();
+
+  r = await reader.reloadFromDiskIfChanged();
+  assert.ok(r);
+  assert.equal(r.sessions.started.length, 0);
+  assert.equal(r.sessions.updated.length, 1);
+  assert.equal(r.sessions.updated[0]!.tokens.total, 150);
+  assert.equal(r.sessions.ended.length, 0);
+
+  // Writer transitions running → succeeded — should bucket as `ended`.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const s2 = writer.getSession("s1")!;
+  s2.status = "succeeded";
+  s2.endedAt = new Date().toISOString();
+  s2.exitCode = 0;
+  writer.upsertSession(s2);
+  await writer.save();
+
+  r = await reader.reloadFromDiskIfChanged();
+  assert.ok(r);
+  assert.equal(r.sessions.started.length, 0);
+  assert.equal(r.sessions.updated.length, 0);
+  assert.equal(r.sessions.ended.length, 1);
+  assert.equal(r.sessions.ended[0]!.status, "succeeded");
 });
