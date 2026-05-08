@@ -434,7 +434,7 @@ export const ConfigSchema = z.object({
       policy: z
         .enum(["pause_for_review", "escalate_model"])
         .default("pause_for_review"),
-      model: z.string().default("opus[1m]"),
+      model: z.string().default("opus"),
     })
     .default({}),
 });

@@ -44,15 +44,15 @@ export const DEFAULT_PRICING: Record<string, PricingEntry> = {
 
 /** Per-stage defaults — the values the user landed on after the audit. */
 export const DEFAULT_STAGE_CONFIG: Record<StageKey, StageConfig> = {
-  setup: { model: "opus[1m]", effort: "xhigh" },
-  "get-tasks": { model: "opus[1m]", effort: "max" },
+  setup: { model: "opus", effort: "xhigh" },
+  "get-tasks": { model: "opus", effort: "max" },
   spec: { model: "sonnet", effort: "med" },
   exec: { model: "sonnet", effort: "high" },
-  exec_ui_check: { model: "opus[1m]", effort: "med" },
+  exec_ui_check: { model: "opus", effort: "med" },
   code_review: { model: "sonnet", effort: "med" },
-  code_review_ui_check: { model: "opus[1m]", effort: "med" },
+  code_review_ui_check: { model: "opus", effort: "med" },
   documentation: { model: "sonnet", effort: "med" },
-  "update-learning": { model: "opus[1m]", effort: "high" },
+  "update-learning": { model: "opus", effort: "high" },
   "merge-resolve": { model: "sonnet", effort: "med" },
   "merge-verify": { model: "sonnet", effort: "med" },
   commit_recovery: { model: "sonnet", effort: "low" },
