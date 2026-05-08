@@ -53,8 +53,9 @@ export const StageConfigSchema = z.object({
   effort: EffortSchema,
   /** Wall-clock max time without an `assistant_text`/`tool_result` progress
    *  event before the session is killed and marked failed. Catches GUI-modal
-   *  hangs the api_retry-counter watchdog can't see. */
-  stallTimeoutMs: z.number().int().positive().optional(),
+   *  hangs the api_retry-counter watchdog can't see. `0` disables the watchdog
+   *  for this stage. */
+  stallTimeoutMs: z.number().int().nonnegative().optional(),
   /** If the agent re-issues the same Bash command this many times back-to-back
    *  with no successful (non-empty, non-error) intervening tool_result, kill
    *  the session and surface a non-retryable `looped_on_blocked_tool:` error.
@@ -352,9 +353,9 @@ export const ConfigSchema = z.object({
   retryCount: z.number().int().nonnegative().default(0),
   maxConsecutiveApiRetries: z.number().int().positive().default(5),
   /** Wall-clock max time (ms) without an `assistant_text`/`tool_result` event
-   *  before a session is killed and marked failed. Defaults to 3 minutes.
-   *  Per-stage `stallTimeoutMs` overrides this value when set. */
-  stallTimeoutMs: z.number().int().positive().default(180_000),
+   *  before a session is killed and marked failed. `0` (the default) disables
+   *  the watchdog. Per-stage `stallTimeoutMs` overrides this value when set. */
+  stallTimeoutMs: z.number().int().nonnegative().default(0),
   /** If the agent re-issues the same Bash command this many times back-to-back
    *  with no successful intervening tool_result, the session is killed with a
    *  non-retryable `looped_on_blocked_tool:` error. An interleaved different

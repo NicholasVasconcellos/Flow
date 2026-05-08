@@ -985,6 +985,8 @@ export class AgentRunner {
 
     const armStallTimer = (): void => {
       if (stallTimer) clearTimeout(stallTimer);
+      // `0` (or any non-positive value) disables the wall-clock stall watchdog.
+      if (stallTimeoutMs <= 0) return;
       stallTimer = setTimeout(() => {
         stalledByWatchdog = true;
         killed = true;
