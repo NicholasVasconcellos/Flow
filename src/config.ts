@@ -47,7 +47,7 @@ export const DEFAULT_STAGE_CONFIG: Record<StageKey, StageConfig> = {
   setup: { model: "opus", effort: "xhigh" },
   "get-tasks": { model: "opus", effort: "max" },
   spec: { model: "sonnet", effort: "med" },
-  exec: { model: "sonnet", effort: "high" },
+  exec: { model: "opus[1m]", effort: "xhigh" },
   exec_ui_check: { model: "opus", effort: "med" },
   code_review: { model: "sonnet", effort: "med" },
   code_review_ui_check: { model: "opus", effort: "med" },
