@@ -10,6 +10,7 @@ import { Scheduler } from "./scheduler.js";
 import {
   initProject,
   resolveBundledAssetsDir,
+  syncBundledPrompts,
   syncBundledSkills,
   ensureTasksLoaded as setupEnsureTasksLoaded,
   watchPlan,
@@ -672,22 +673,37 @@ export async function createFlow(
     eventBus,
   });
 
-  // Bundled skills can grow over time; existing projects must pick up
-  // newly-added skill directories so stages like `update-learning` /
-  // `merge-verify` don't crash the orchestrator on first reach. Add-only,
-  // never overwrites user edits. Skipped for read-only commands.
+  // Bundled prompts and skills can grow over time; existing projects must
+  // pick up newly-added entries so stages like `update-learning` /
+  // `merge-verify` don't crash the orchestrator on first reach. Bundled
+  // files are refreshed in lockstep with Flow itself so a stage prompt
+  // can't go stale; project-added skills are left untouched. Skipped for
+  // read-only commands.
   if (!opts.readOnly) {
-    const sync = await syncBundledSkills(paths, assetsDir);
-    if (sync.added.length > 0) {
+    const promptSync = await syncBundledPrompts(paths, assetsDir);
+    if (promptSync.added.length > 0) {
       // eslint-disable-next-line no-console
       console.log(
-        `Synced ${sync.added.length} bundled skill(s) into .flow/skills: ${sync.added.join(", ")}`,
+        `Synced ${promptSync.added.length} bundled prompt(s) into .flow/prompts: ${promptSync.added.join(", ")}`,
       );
     }
-    if (sync.updated.length > 0) {
+    if (promptSync.updated.length > 0) {
       // eslint-disable-next-line no-console
       console.log(
-        `Refreshed ${sync.updated.length} bundled skill(s) in .flow/skills: ${sync.updated.join(", ")}`,
+        `Refreshed ${promptSync.updated.length} bundled prompt(s) in .flow/prompts: ${promptSync.updated.join(", ")}`,
+      );
+    }
+    const skillSync = await syncBundledSkills(paths, assetsDir);
+    if (skillSync.added.length > 0) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `Synced ${skillSync.added.length} bundled skill(s) into .flow/skills: ${skillSync.added.join(", ")}`,
+      );
+    }
+    if (skillSync.updated.length > 0) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `Refreshed ${skillSync.updated.length} bundled skill(s) in .flow/skills: ${skillSync.updated.join(", ")}`,
       );
     }
   }

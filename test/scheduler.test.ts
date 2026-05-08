@@ -19,7 +19,7 @@ import type {
   TaskStage,
 } from "../src/types.js";
 import type { AgentRunner, SpawnArgs } from "../src/agent.js";
-import { MissingSkillError } from "../src/agent.js";
+import { MissingPromptError } from "../src/agent.js";
 import type { GitManager, CommitMessage } from "../src/git.js";
 
 // ---------------------------------------------------------------------------
@@ -1310,7 +1310,7 @@ test(
 );
 
 test(
-  "missing skill: stage pauses with actionable message on first attempt (no retries)",
+  "missing prompt: stage pauses with actionable message on first attempt (no retries)",
   { timeout: 10000 },
   async () => {
     const h = await makeHarness({
@@ -1318,9 +1318,9 @@ test(
       config: { retryCount: 5 },
       agentScript: (call) => {
         if (call.stage === "spec") {
-          throw new MissingSkillError(
+          throw new MissingPromptError(
             "spec",
-            "/fake/.flow/skills/spec/SKILL.md",
+            "/fake/.flow/prompts/prompt-spec.md",
           );
         }
         return {};
@@ -1330,19 +1330,19 @@ test(
     const t = await h.scheduler.runTask("A");
     assert.equal(t.status, "paused");
     assert.equal(t.stage, "spec");
-    assert.match(t.lastError!.message, /Skill "spec" missing/);
+    assert.match(t.lastError!.message, /Prompt "spec" missing/);
     assert.match(t.lastError!.message, /flow init/);
 
     const specCalls = h.agent.calls.filter((c) => c.stage === "spec");
     assert.equal(
       specCalls.length,
       1,
-      "missing-skill is non-retryable — should not consume retry budget",
+      "missing-prompt is non-retryable — should not consume retry budget",
     );
 
     const errs = h.notifications.filter((n) => n.severity === "error");
     assert.equal(errs.length, 1);
-    assert.match(errs[0]!.body, /Skill "spec" missing/);
+    assert.match(errs[0]!.body, /Prompt "spec" missing/);
   },
 );
 
@@ -1355,9 +1355,9 @@ test(
       config: { retryCount: 0, maxConcurrent: 2 },
       agentScript: (call) => {
         if (call.taskId === "A" && call.stage === "spec") {
-          throw new MissingSkillError(
+          throw new MissingPromptError(
             "spec",
-            "/fake/.flow/skills/spec/SKILL.md",
+            "/fake/.flow/prompts/prompt-spec.md",
           );
         }
         return {};
@@ -1369,7 +1369,7 @@ test(
     const a = h.state.getTask("A")!;
     const b = h.state.getTask("B")!;
     assert.equal(a.status, "paused", "broken task should be paused, not running");
-    assert.match(a.lastError!.message, /Skill "spec" missing/);
+    assert.match(a.lastError!.message, /Prompt "spec" missing/);
     assert.equal(
       b.status,
       "merged",

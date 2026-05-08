@@ -12,7 +12,7 @@ import type {
   TaskStage,
 } from "./types.js";
 import type { AgentRunner } from "./agent.js";
-import { isLoopedOnBlockedTool, MissingSkillError } from "./agent.js";
+import { isLoopedOnBlockedTool, MissingPromptError } from "./agent.js";
 import type { StateStore } from "./state.js";
 import type { GitManager } from "./git.js";
 import type { EventBus } from "./events.js";
@@ -636,13 +636,13 @@ export class Scheduler {
         ...(extraPrompt ? { extraPrompt } : {}),
       });
     } catch (err) {
-      // Pre-spawn failures (e.g. missing skill file) never produce a Session,
+      // Pre-spawn failures (e.g. missing prompt file) never produce a Session,
       // so they bypass the failure-handling path below. Translate them into a
       // per-task pause here so a single bad stage can't escape into the drain
       // and crash peer tasks. Skip retries for non-recoverable errors like
-      // MissingSkillError — retrying won't materialize the file.
-      if (err instanceof MissingSkillError) {
-        const message = `Skill "${err.skillName}" missing at ${err.skillPath}. Re-run \`flow init\` to install bundled skills, then resume the task.`;
+      // MissingPromptError — retrying won't materialize the file.
+      if (err instanceof MissingPromptError) {
+        const message = `Prompt "${err.promptName}" missing at ${err.promptPath}. Re-run \`flow init\` to install bundled prompts, then resume the task.`;
         return await this.markPaused(taskId, stage, "", message, "agent_error");
       }
       const message = `${stage} crashed before producing a session: ${(err as Error).message}`;

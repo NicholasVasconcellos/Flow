@@ -152,7 +152,7 @@ test("resolveProjectStatus: ready when plan.md + config.json + tasks.json all pr
 // scaffoldFlowDir
 // ---------------------------------------------------------------------------
 
-test("scaffoldFlowDir: copies skills, writes default config, idempotent", async () => {
+test("scaffoldFlowDir: copies prompts, writes default config, idempotent", async () => {
   const root = await mkTmp();
   const paths = new Paths(root);
 
@@ -170,7 +170,7 @@ test("scaffoldFlowDir: copies skills, writes default config, idempotent", async 
   assert.deepEqual(st.tasks, []);
   assert.deepEqual(st.sessions, []);
 
-  // Skills copied — verify a subset.
+  // Stage prompts copied — verify a subset.
   for (const name of [
     "get-tasks",
     "setup",
@@ -182,25 +182,24 @@ test("scaffoldFlowDir: copies skills, writes default config, idempotent", async 
     "commit",
     "merge-resolve",
   ]) {
-    const body = await fs.readFile(paths.skillFile(name), "utf8");
-    assert.ok(body.length > 0, `skill ${name} has content`);
+    const body = await fs.readFile(paths.promptFile(name), "utf8");
+    assert.ok(body.length > 0, `prompt ${name} has content`);
   }
 
-  // Core skills self-heal: edits to bundled skill files are overwritten
-  // back to bundled content on the next scaffold. User-added skills
-  // (directories not present in the bundle) are preserved. config.json
+  // Bundled prompts self-heal: edits to bundled prompt files are overwritten
+  // back to bundled content on the next scaffold. User-added prompts
+  // (filenames not present in the bundle) are preserved. config.json
   // is untouched once it exists.
-  const bundledExec = await fs.readFile(paths.skillFile("exec"), "utf8");
-  await fs.writeFile(paths.skillFile("exec"), "MY CUSTOM SKILL\n", "utf8");
-  await fs.mkdir(path.dirname(paths.skillFile("project-only")), { recursive: true });
-  await fs.writeFile(paths.skillFile("project-only"), "PROJECT-ONLY SKILL\n", "utf8");
+  const bundledExec = await fs.readFile(paths.promptFile("exec"), "utf8");
+  await fs.writeFile(paths.promptFile("exec"), "MY CUSTOM PROMPT\n", "utf8");
+  await fs.writeFile(paths.promptFile("project-only"), "PROJECT-ONLY PROMPT\n", "utf8");
   await fs.writeFile(paths.configJson, '{"custom":true}', "utf8");
   await scaffoldFlowDir(paths, ASSETS_DIR);
 
-  const execAfter = await fs.readFile(paths.skillFile("exec"), "utf8");
+  const execAfter = await fs.readFile(paths.promptFile("exec"), "utf8");
   assert.equal(execAfter, bundledExec);
-  const projectOnlyAfter = await fs.readFile(paths.skillFile("project-only"), "utf8");
-  assert.equal(projectOnlyAfter, "PROJECT-ONLY SKILL\n");
+  const projectOnlyAfter = await fs.readFile(paths.promptFile("project-only"), "utf8");
+  assert.equal(projectOnlyAfter, "PROJECT-ONLY PROMPT\n");
   const cfgAfter = await fs.readFile(paths.configJson, "utf8");
   assert.equal(cfgAfter, '{"custom":true}');
 });
@@ -217,7 +216,7 @@ test("initProject: scaffolds + calls git.ensureRepo", async () => {
   await initProject(paths, { assetsDir: ASSETS_DIR, git });
 
   assert.ok(await fileExists(paths.configJson));
-  assert.ok(await fileExists(paths.skillFile("exec")));
+  assert.ok(await fileExists(paths.promptFile("exec")));
   assert.equal(calls.length, 1);
   assert.equal(calls[0]!.method, "ensureRepo");
 });

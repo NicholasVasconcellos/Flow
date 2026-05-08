@@ -95,8 +95,14 @@ test("ProjectArtifacts.fetch — project.skill / project.skills.list", { timeout
   const root = await mkTmp();
   const paths = new Paths(root);
   await scaffoldFlowDir(paths, ASSETS_DIR);
-  // scaffoldFlowDir already populates skills; assert non-empty list and one
-  // skill body roundtrips cleanly.
+  // Project-level skills are written by `update-learning` into `.flow/skills/`.
+  // Stage-prompt content lives in `.flow/prompts/` and is not surfaced via
+  // these artifact kinds. Seed a project skill so the list/body roundtrip
+  // has something to return.
+  const skillFile = paths.skillFile("project-rule");
+  await fs.mkdir(path.dirname(skillFile), { recursive: true });
+  await fs.writeFile(skillFile, "PROJECT RULE BODY", "utf8");
+
   const state = new StateStore(paths);
   await state.load();
   const artifacts = new ProjectArtifacts(paths, state);

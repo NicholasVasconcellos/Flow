@@ -89,19 +89,29 @@ export async function scaffoldFlowDir(
 ): Promise<void> {
   await ensureDir(paths.flowDir);
   await ensureDir(paths.skillsDir);
+  await ensureDir(paths.promptsDir);
   await ensureDir(paths.tasksDir);
   await ensureDir(paths.projectSessionsDir);
   await ensureDir(paths.worktreesDir);
   await ensureDir(paths.learningsDir);
 
   // Copy bundled skills. Files are byte-compared and only refreshed if
-  // they differ — see `copySkillsTree`.
+  // they differ — see `copyAssetsTree`.
   const srcSkills = path.join(assetsDir, "skills");
   try {
     await fs.access(srcSkills);
-    await copySkillsTree(srcSkills, paths.skillsDir);
+    await copyAssetsTree(srcSkills, paths.skillsDir);
   } catch {
     // No bundled skills — leave the directory empty.
+  }
+
+  // Copy bundled stage prompts (flat dir of `prompt-<stage>.md` files).
+  const srcPrompts = path.join(assetsDir, "prompts");
+  try {
+    await fs.access(srcPrompts);
+    await copyAssetsTree(srcPrompts, paths.promptsDir);
+  } catch {
+    // No bundled prompts — leave the directory empty.
   }
 
   // Config.
@@ -164,12 +174,64 @@ export async function syncBundledSkills(
     const srcPath = path.join(srcSkills, entry.name);
     const destPath = path.join(paths.skillsDir, entry.name);
     const existedLocally = destNames.has(entry.name);
-    const refreshed = await copySkillsTree(srcPath, destPath);
+    const refreshed = await copyAssetsTree(srcPath, destPath);
     // Only count as "updated" if the directory already existed locally;
     // brand-new directories show up under `added` instead.
     if (refreshed && existedLocally) updatedSet.add(entry.name);
   }
   const updated = [...updatedSet].sort();
+  return { added, updated };
+}
+
+/**
+ * Sibling of `syncBundledSkills` for the flat `assets/prompts/` tree. Each
+ * file (`prompt-<stage>.md`) is copied into `.flow/prompts/`, byte-compared
+ * so unchanged files are skipped. Files that exist only locally are left
+ * alone — the loop iterates the bundled source. Returns the lists of
+ * filenames that were added or refreshed.
+ *
+ * Safe to invoke on every non-read-only Flow command — idempotent.
+ */
+export async function syncBundledPrompts(
+  paths: Paths,
+  assetsDir: string,
+): Promise<{ added: string[]; updated: string[] }> {
+  const srcPrompts = path.join(assetsDir, "prompts");
+  try {
+    await fs.access(srcPrompts);
+  } catch {
+    return { added: [], updated: [] };
+  }
+  await ensureDir(paths.promptsDir);
+  const [srcEntries, destEntries] = await Promise.all([
+    fs.readdir(srcPrompts, { withFileTypes: true }),
+    fs.readdir(paths.promptsDir, { withFileTypes: true }).catch(() => []),
+  ]);
+  const destNames = new Set(
+    destEntries.filter((e) => e.isFile()).map((e) => e.name),
+  );
+  const added: string[] = [];
+  const updated: string[] = [];
+  for (const entry of srcEntries) {
+    if (!entry.isFile()) continue;
+    if (!entry.name.endsWith(".md")) continue;
+    const srcPath = path.join(srcPrompts, entry.name);
+    const destPath = path.join(paths.promptsDir, entry.name);
+    if (destNames.has(entry.name)) {
+      const [a, b] = await Promise.all([
+        fs.readFile(srcPath),
+        fs.readFile(destPath),
+      ]);
+      if (a.equals(b)) continue;
+      await fs.copyFile(srcPath, destPath);
+      updated.push(entry.name);
+    } else {
+      await fs.copyFile(srcPath, destPath);
+      added.push(entry.name);
+    }
+  }
+  added.sort();
+  updated.sort();
   return { added, updated };
 }
 
@@ -180,7 +242,7 @@ export async function syncBundledSkills(
  * refreshed); the caller uses this to decide whether to surface the
  * directory in the `updated` list.
  */
-async function copySkillsTree(src: string, dest: string): Promise<boolean> {
+async function copyAssetsTree(src: string, dest: string): Promise<boolean> {
   await ensureDir(dest);
   const entries = await fs.readdir(src, { withFileTypes: true });
   let changed = false;
@@ -188,7 +250,7 @@ async function copySkillsTree(src: string, dest: string): Promise<boolean> {
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
-      const sub = await copySkillsTree(srcPath, destPath);
+      const sub = await copyAssetsTree(srcPath, destPath);
       if (sub) changed = true;
       continue;
     }

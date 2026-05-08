@@ -25,8 +25,8 @@ async function mkTmp(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), "flow-agent-"));
 }
 
-async function writeSkill(paths: Paths, name: string, body: string): Promise<void> {
-  const file = paths.skillFile(name);
+async function writePrompt(paths: Paths, name: string, body: string): Promise<void> {
+  const file = paths.promptFile(name);
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, body, "utf8");
 }
@@ -127,10 +127,10 @@ function makeRunner(
 // composePrompt
 // ---------------------------------------------------------------------------
 
-test("composePrompt references skill via @path and includes task + context files", async () => {
+test("composePrompt references prompt via @path and includes task + context files", async () => {
   const root = await mkTmp();
   const paths = new Paths(root);
-  await writeSkill(paths, "exec", "SKILL BODY");
+  await writePrompt(paths, "exec", "PROMPT BODY");
 
   const task: TaskDef = {
     id: "T1",
@@ -157,8 +157,8 @@ test("composePrompt references skill via @path and includes task + context files
   );
 
   assert.ok(
-    prompt.startsWith(`@${paths.skillFile("exec")}`),
-    "prompt must begin with @<skill-path>",
+    prompt.startsWith(`@${paths.promptFile("exec")}`),
+    "prompt must begin with @<prompt-path>",
   );
   assert.match(prompt, /# Task\nBuild widget/);
   assert.match(prompt, /Creates a new widget component/);
@@ -186,7 +186,7 @@ test("composePrompt references skill via @path and includes task + context files
 test("composePrompt omits sections with no content", async () => {
   const root = await mkTmp();
   const paths = new Paths(root);
-  await writeSkill(paths, "exec", "SKILL BODY");
+  await writePrompt(paths, "exec", "SKILL BODY");
 
   const prompt = await composePrompt(
     { paths },
@@ -197,13 +197,13 @@ test("composePrompt omits sections with no content", async () => {
       worktreePath: root,
     },
   );
-  assert.ok(prompt.startsWith(`@${paths.skillFile("exec")}`));
+  assert.ok(prompt.startsWith(`@${paths.promptFile("exec")}`));
   assert.doesNotMatch(prompt, /# Task/);
   assert.doesNotMatch(prompt, /# Context/);
   assert.doesNotMatch(prompt, /Prior session/);
 });
 
-test("composePrompt throws with skill name when skill file missing", async () => {
+test("composePrompt throws with prompt name when prompt file missing", async () => {
   const root = await mkTmp();
   const paths = new Paths(root);
   await assert.rejects(
@@ -220,11 +220,11 @@ test("composePrompt throws with skill name when skill file missing", async () =>
   );
 });
 
-test("composePrompt does not inline a stage-protocol block (each SKILL.md owns its Done-when)", async () => {
+test("composePrompt does not inline a stage-protocol block (each prompt owns its Done-when)", async () => {
   const root = await mkTmp();
   const paths = new Paths(root);
   for (const name of ["merge-resolve", "update-learning", "exec"]) {
-    await writeSkill(paths, name, "SKILL BODY");
+    await writePrompt(paths, name, "SKILL BODY");
   }
 
   for (const stage of ["merge-resolve", "update-learning", "exec"] as const) {
@@ -239,15 +239,15 @@ test("composePrompt does not inline a stage-protocol block (each SKILL.md owns i
     );
 
     assert.doesNotMatch(prompt, /# Stage protocol/, `${stage}: protocol block should be gone`);
-    assert.doesNotMatch(prompt, /git add -A && git commit/, `${stage}: commit instruction lives in skill body, not prompt`);
-    assert.doesNotMatch(prompt, /Write the stage signal and stop/, `${stage}: signal-emit text lives in skill body, not prompt`);
+    assert.doesNotMatch(prompt, /git add -A && git commit/, `${stage}: commit instruction lives in prompt body, not composer`);
+    assert.doesNotMatch(prompt, /Write the stage signal and stop/, `${stage}: signal-emit text lives in prompt body, not composer`);
   }
 });
 
 test("composePrompt Workspace block includes stage: field for both ui-check stages", async () => {
   const root = await mkTmp();
   const paths = new Paths(root);
-  await writeSkill(paths, "ui-check", "SKILL BODY");
+  await writePrompt(paths, "ui-check", "SKILL BODY");
 
   for (const stage of ["exec_ui_check", "code_review_ui_check"] as const) {
     const prompt = await composePrompt(
@@ -271,7 +271,7 @@ test("composePrompt only emits Learnings block for LEARNINGS_DRAFT stages", asyn
   const root = await mkTmp();
   const paths = new Paths(root);
   for (const name of ["exec", "merge-resolve", "update-learning"]) {
-    await writeSkill(paths, name, "SKILL BODY");
+    await writePrompt(paths, name, "SKILL BODY");
   }
 
   const execPrompt = await composePrompt(
@@ -317,7 +317,7 @@ test("spawnAgent happy path: emits events, writes JSONL, computes cost", async (
   const spawnerHandle = makeFakeSpawner();
   const { runner, paths, bus } = makeRunner(root, spawnerHandle);
 
-  await writeSkill(paths, "exec", "do the thing");
+  await writePrompt(paths, "exec", "do the thing");
 
   const usageLine = JSON.stringify({
     type: "result",
@@ -407,7 +407,7 @@ test("FLOW_BLOCKED marker kills process, emits notification, marks failed", asyn
   const spawnerHandle = makeFakeSpawner();
   const { runner, paths, bus } = makeRunner(root, spawnerHandle);
 
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   spawnerHandle.queue.push({
     stdout: [
@@ -453,7 +453,7 @@ test("autocompact: compact_boundary line + exit 0 yields status=autocompacted", 
   const spawnerHandle = makeFakeSpawner();
   const { runner, bus } = makeRunner(root, spawnerHandle);
   const paths = new Paths(root);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   spawnerHandle.queue.push({
     stdout: [
@@ -489,7 +489,7 @@ test("synthetic stream-idle in assistant text → errorKind=api_stream_idle, tra
   const spawnerHandle = makeFakeSpawner();
   const { runner } = makeRunner(root, spawnerHandle);
   const paths = new Paths(root);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   spawnerHandle.queue.push({
     stdout: [
@@ -521,7 +521,7 @@ test("zero-token SIGTERM with no assistant text → errorKind=zero_token_kill, n
   const spawnerHandle = makeFakeSpawner();
   const { runner } = makeRunner(root, spawnerHandle);
   const paths = new Paths(root);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   // No assistant text at all; only an init line, then exit 143 with no usage.
   spawnerHandle.queue.push({
@@ -547,7 +547,7 @@ test("nonzero exit code yields status=failed with error string", async () => {
   const spawnerHandle = makeFakeSpawner();
   const { runner } = makeRunner(root, spawnerHandle);
   const paths = new Paths(root);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   spawnerHandle.queue.push({
     stdout: [JSON.stringify({ type: "system", subtype: "init" })],
@@ -575,7 +575,7 @@ test("context probe no-op when spawner has no further script; doesn't throw", as
   const spawnerHandle = makeFakeSpawner();
   const { runner } = makeRunner(root, spawnerHandle);
   const paths = new Paths(root);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   spawnerHandle.queue.push({
     stdout: [JSON.stringify({ type: "system", subtype: "init" })],
@@ -602,7 +602,7 @@ test("populates contextPercentage from in-stream usage", async () => {
   const root = await mkTmp();
   const spawnerHandle = makeFakeSpawner();
   const { runner, paths, bus } = makeRunner(root, spawnerHandle);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   // 60_000 + 40_000 = 100_000 → 100_000 / 200_000 = 50%.
   spawnerHandle.queue.push({
@@ -642,7 +642,7 @@ test("skips fallback probe when in-stream usage seen", async () => {
   const root = await mkTmp();
   const spawnerHandle = makeFakeSpawner();
   const { runner, paths } = makeRunner(root, spawnerHandle);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   spawnerHandle.queue.push({
     stdout: [
@@ -680,7 +680,7 @@ test("fallback probe runs when no in-stream usage; uses --resume + json mode", a
   const root = await mkTmp();
   const spawnerHandle = makeFakeSpawner();
   const { runner, paths } = makeRunner(root, spawnerHandle);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   // Main: no usage event at all — observedInStream stays false.
   spawnerHandle.queue.push({
@@ -746,7 +746,7 @@ test("partial .meta.json contains id, taskId, stage, startedAt before session en
   // write (just before session.ended).
   const root = await mkTmp();
   const paths = new Paths(root);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   const taskId = "T-partial-2";
   let snapshot: string | null = null;
@@ -817,7 +817,7 @@ test("project-level session meta has non-null id matching the session ULID", asy
   const root = await mkTmp();
   const spawnerHandle = makeFakeSpawner();
   const { runner, paths } = makeRunner(root, spawnerHandle);
-  await writeSkill(paths, "setup", "skill");
+  await writePrompt(paths, "setup", "skill");
 
   spawnerHandle.queue.push({
     stdout: [JSON.stringify({ type: "system", subtype: "init" })],
@@ -955,7 +955,7 @@ test("task_progress refreshes the stall watchdog", async () => {
 
   const { spawner } = makeStallSpawner(frames);
   const { runner, paths } = makeStallRunner(root, spawner, STALL_MS);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   const session = await runner.spawnAgent({
     taskId: "T-stall-1",
@@ -988,7 +988,7 @@ test("stall after rate_limit_event marks session as transientError", async () =>
 
   const { spawner } = makeStallSpawner(frames);
   const { runner, paths } = makeStallRunner(root, spawner, STALL_MS);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   const session = await runner.spawnAgent({
     taskId: "T-stall-2",
@@ -1026,7 +1026,7 @@ test("rate_limit_event with resetsAt populates session.rateLimitResetsAt", async
 
   const { spawner } = makeStallSpawner(frames);
   const { runner, paths } = makeStallRunner(root, spawner, STALL_MS);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   const session = await runner.spawnAgent({
     taskId: "T-stall-resetsAt",
@@ -1051,7 +1051,7 @@ test("stall without rate_limit_event leaves transientError unset", async () => {
 
   const { spawner } = makeStallSpawner(frames);
   const { runner, paths } = makeStallRunner(root, spawner, STALL_MS);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   const session = await runner.spawnAgent({
     taskId: "T-stall-3",
@@ -1108,7 +1108,7 @@ test("repeat cap: identical Bash with good intervening results does NOT fire", a
   const root = await mkTmp();
   const spawnerHandle = makeFakeSpawner();
   const { runner, paths } = makeRunner(root, spawnerHandle);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   spawnerHandle.queue.push({
     stdout: [
@@ -1139,7 +1139,7 @@ test("repeat cap: same Bash interleaved with a different tool does NOT fire", as
   const root = await mkTmp();
   const spawnerHandle = makeFakeSpawner();
   const { runner, paths } = makeRunner(root, spawnerHandle);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   spawnerHandle.queue.push({
     stdout: [
@@ -1169,7 +1169,7 @@ test("repeat cap: 3 consecutive identical Bash with no result DOES fire", async 
   const root = await mkTmp();
   const spawnerHandle = makeFakeSpawner();
   const { runner, paths } = makeRunner(root, spawnerHandle);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   spawnerHandle.queue.push({
     stdout: [
@@ -1197,7 +1197,7 @@ test("repeat cap: 3 consecutive identical Bash with is_error results DOES fire",
   const root = await mkTmp();
   const spawnerHandle = makeFakeSpawner();
   const { runner, paths } = makeRunner(root, spawnerHandle);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   spawnerHandle.queue.push({
     stdout: [
@@ -1228,7 +1228,7 @@ test("repeat cap: tool_result + next tool_use bundled in one user payload still 
   const root = await mkTmp();
   const spawnerHandle = makeFakeSpawner();
   const { runner, paths } = makeRunner(root, spawnerHandle);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   // Mixed shape: one user payload carries both the result for the previous
   // tool_use and the next tool_use of the same command. The watchdog must
@@ -1435,7 +1435,7 @@ test("killAllLive swallows errors from individual proc.kill calls", async () => 
 test("ordinal: stable across orchestrator restarts when state is wired", async () => {
   const root = await mkTmp();
   const paths = new Paths(root);
-  await writeSkill(paths, "exec", "skill");
+  await writePrompt(paths, "exec", "skill");
 
   // First run: a fresh runner backed by an empty state assigns ordinal=1.
   const state1 = new StateStore(paths);

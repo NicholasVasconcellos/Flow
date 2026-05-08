@@ -35,6 +35,14 @@ export class Paths {
     return path.join(this.skillsDir, name, "SKILL.md");
   }
 
+  get promptsDir(): string {
+    return path.join(this.flowDir, "prompts");
+  }
+
+  promptFile(name: string): string {
+    return path.join(this.promptsDir, `prompt-${name}.md`);
+  }
+
   get worktreesDir(): string {
     return path.join(this.flowDir, "worktrees");
   }

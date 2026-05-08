@@ -114,16 +114,16 @@ const LEARNINGS_DRAFT_STAGES = new Set<string>([
   "documentation",
 ]);
 
-export class MissingSkillError extends Error {
-  readonly skillName: string;
-  readonly skillPath: string;
-  constructor(skillName: string, skillPath: string) {
+export class MissingPromptError extends Error {
+  readonly promptName: string;
+  readonly promptPath: string;
+  constructor(promptName: string, promptPath: string) {
     super(
-      `Skill "${skillName}" not found at ${skillPath}. Ensure .flow/skills/${skillName}/SKILL.md exists.`,
+      `Prompt "${promptName}" not found at ${promptPath}. Ensure .flow/prompts/prompt-${promptName}.md exists.`,
     );
-    this.name = "MissingSkillError";
-    this.skillName = skillName;
-    this.skillPath = skillPath;
+    this.name = "MissingPromptError";
+    this.promptName = promptName;
+    this.promptPath = promptPath;
   }
 }
 
@@ -131,17 +131,17 @@ export async function composePrompt(
   deps: Pick<AgentRunnerDeps, "paths">,
   args: SpawnArgs,
 ): Promise<string> {
-  // Reference the skill file via Claude Code's `@path` syntax — the subprocess
-  // reads it directly so we avoid inlining 100+ lines of markdown into argv.
-  // Fail-fast here if the file is missing so the caller sees the skill name,
-  // not an opaque subprocess error.
-  const skillPath = deps.paths.skillFile(args.skillName);
+  // Reference the stage-prompt file via Claude Code's `@path` syntax — the
+  // subprocess reads it directly so we avoid inlining markdown into argv.
+  // Fail-fast here if the file is missing so the caller sees the prompt
+  // name, not an opaque subprocess error.
+  const promptPath = deps.paths.promptFile(args.skillName);
   try {
-    await fs.access(skillPath);
+    await fs.access(promptPath);
   } catch {
-    throw new MissingSkillError(args.skillName, skillPath);
+    throw new MissingPromptError(args.skillName, promptPath);
   }
-  const sections: string[] = [`@${skillPath}`];
+  const sections: string[] = [`@${promptPath}`];
 
   const task = args.task;
   if (task) {

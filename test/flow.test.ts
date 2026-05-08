@@ -302,8 +302,8 @@ test("initFlowProject scaffolds .flow/ on an empty repo", { timeout: 15000 }, as
   const paths = new Paths(root);
   // config.json present.
   await assert.doesNotReject(fs.access(paths.configJson));
-  // At least one skill copied.
-  await assert.doesNotReject(fs.access(paths.skillFile("spec")));
+  // At least one stage prompt copied.
+  await assert.doesNotReject(fs.access(paths.promptFile("spec")));
   // .git was created by GitManager.ensureRepo.
   await assert.doesNotReject(fs.access(path.join(root, ".git")));
 });
