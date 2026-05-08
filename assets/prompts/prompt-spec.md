@@ -19,5 +19,5 @@ Don't: implement anything. mock unimplemented modules. modify existing source. a
 
 Done:
 git add -A && git commit -m "<imperative ≤72 chars>"
-echo '{"stage":"spec","status":"done"}' > <stage signal path from Workspace>
-Blocked: "status":"blocked","reason":"…"
+echo '{"status":"done"}' > <stage signal path from Workspace>
+Blocked: '{"status":"blocked","reason":"…"}'

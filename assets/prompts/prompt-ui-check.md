@@ -52,6 +52,5 @@ Don't: edit app code. commit screenshots (.flow/tasks/ untracked). retry a faili
 
 Done:
 In-worktree changes (round file etc.) → git add -A && git commit -m "<imperative ≤72 chars>". Else skip.
-echo '{"stage":"<stage>","status":"done"}' > <stage signal path from Workspace>
-Use Workspace stage: value (exec_ui_check or code_review_ui_check).
-Blocked only if every interaction unverifiable.
+echo '{"status":"done"}' > <stage signal path from Workspace>
+Blocked: '{"status":"blocked","reason":"…"}' — only if every interaction unverifiable.

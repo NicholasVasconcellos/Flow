@@ -215,9 +215,10 @@ function composeSquashCommitMessage(
 }
 
 /** Stage signal payload the agent writes to `.flow/tasks/<id>/stage.json` to
- *  tell the orchestrator the stage finished cleanly (or is blocked). */
+ *  tell the orchestrator the stage finished cleanly (or is blocked). The
+ *  harness clears stage.json at the start of each stage run, so the orchestrator
+ *  already knows which stage is executing — only `status` is meaningful. */
 export interface StageSignal {
-  stage: string;
   status: "done" | "blocked";
   reason?: string;
 }
@@ -237,11 +238,9 @@ async function readStageSignal(
     const parsed = JSON.parse(body) as Partial<StageSignal>;
     if (
       parsed &&
-      typeof parsed.stage === "string" &&
       (parsed.status === "done" || parsed.status === "blocked")
     ) {
       return {
-        stage: parsed.stage,
         status: parsed.status,
         ...(parsed.reason ? { reason: parsed.reason } : {}),
       };
@@ -716,26 +715,12 @@ export class Scheduler {
       );
     }
 
-    // Trust the agent's done signal: a matching `done` stage signal is
-    // sufficient to advance, regardless of HEAD movement or session
-    // status. A subprocess that managed to flush a done signal before
-    // crashing had already reached completion; the trailing failure is
-    // incidental.
-    if (signal && signal.status === "done" && signal.stage === stage) {
+    // Trust the agent's done signal. stage.json is cleared at the start of
+    // each stage run, so any present signal must be from this run. The
+    // harness already knows which stage is executing — the agent's stage
+    // field is informational only.
+    if (signal && signal.status === "done") {
       return await this.finalizeStageSuccess(taskId);
-    }
-
-    // Stage drift — agent wrote a signal claiming a different stage. Retry
-    // with a budget so the user notices.
-    if (signal && signal.status === "done" && signal.stage !== stage) {
-      const msg = `Stage signal mismatch: agent wrote stage="${signal.stage}" but expected "${stage}"`;
-      return await this.bumpRetryOrPause(
-        taskId,
-        stage,
-        session.id,
-        msg,
-        "stage_signal_mismatch",
-      );
     }
 
     // Failed session that wasn't rescued: transient retry first (no budget

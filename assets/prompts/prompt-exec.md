@@ -18,6 +18,6 @@ When acceptance met: commit with one-line title + concise summary.
 If blocked: report.
 
 Progress stage:
-echo '{"stage":"<stage>","status":"done"}' > <stage signal path from Workspace>
+echo '{"status":"done"}' > <stage signal path from Workspace>
 
-Use Workspace stage: value. Blocked: "status":"blocked","reason":"…".
+Blocked: '{"status":"blocked","reason":"…"}'

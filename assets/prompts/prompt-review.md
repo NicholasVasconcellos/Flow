@@ -26,5 +26,5 @@ Don't: rewrite working code. add docstrings to untouched code. refactor for clea
 
 Done (status PASSED):
 Edits made → git add -A && git commit -m "<imperative ≤72 chars>". Else skip commit.
-echo '{"stage":"code_review","status":"done"}' > <stage signal path from Workspace>
-Blocked: "status":"blocked","reason":"…"
+echo '{"status":"done"}' > <stage signal path from Workspace>
+Blocked: '{"status":"blocked","reason":"…"}'

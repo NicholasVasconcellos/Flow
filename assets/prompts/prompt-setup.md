@@ -33,7 +33,7 @@ AGENTS.md (lean — every agent loads it):
    - Each stage prompt owns its Done-when steps (commit, signal emit, escape hatches). Follow exactly.
    - Halt: emit FLOW_BLOCKED: <reason> on stdout to stop the queue.
    - Warn: emit FLOW_REVIEW_REQUESTED: <reason> on stdout to flag without stopping.
-   - Stage signal: {"stage":"<stage>","status":"done"} written to the stage signal path.
+   - Stage signal: {"status":"done"} written to the stage signal path.
 
 .flow/SetupNotes.md:
 Tools installed — MCPs, plugins, skills (with paths), CLIs (with versions).

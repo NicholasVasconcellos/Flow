@@ -14,5 +14,5 @@ Don't: document internals (unless they affect public behavior). add boilerplate 
 
 Done:
 Doc edits made → git add -A && git commit -m "<imperative ≤72 chars>". Else skip commit.
-echo '{"stage":"documentation","status":"done"}' > <stage signal path from Workspace>
-Blocked: "status":"blocked","reason":"…"
+echo '{"status":"done"}' > <stage signal path from Workspace>
+Blocked: '{"status":"blocked","reason":"…"}'

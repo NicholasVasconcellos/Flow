@@ -40,5 +40,5 @@ Never write to .claude/skills/ — user opts in to registering separately.
 Don't: fabricate. pad. modify code/tests/configs/task docs. commit.
 
 Done:
-echo '{"stage":"update-learning","status":"done"}' > <stage signal path from Workspace>
-Blocked: "status":"blocked","reason":"…"
+echo '{"status":"done"}' > <stage signal path from Workspace>
+Blocked: '{"status":"blocked","reason":"…"}'
