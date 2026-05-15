@@ -173,25 +173,12 @@ const TaskDetailsPanel = ({ taskId, openLog, openLogIds = [] }) => {
         </>
       )}
 
-      {/* Cold-load / lazy artifacts (steps 4–6) */}
-      {detail.progress && (
-        <>
-          <SectionH>Progress</SectionH>
-          <PreBlock text={detail.progress}/>
-        </>
-      )}
-      {detail.summary && (
-        <>
-          <SectionH>Summary</SectionH>
-          <PreBlock text={detail.summary}/>
-        </>
-      )}
-      {detail.learningsDraft && (
-        <>
-          <SectionH>Learnings draft</SectionH>
-          <PreBlock text={detail.learningsDraft}/>
-        </>
-      )}
+      {/* Per-task artifact files (.flow/tasks/<id>/*). Always render so old
+          tasks without these files surface a missing-icon placeholder rather
+          than silently disappearing. */}
+      <TaskFileSection label="Progress" taskId={taskId} kind="task.progress" body={detail.progress}/>
+      <TaskFileSection label="Summary" taskId={taskId} kind="task.summary" body={detail.summary}/>
+      <TaskFileSection label="Learnings draft" taskId={taskId} kind="task.learnings-draft" body={detail.learningsDraft}/>
       {Array.isArray(detail.roundIssues) && detail.roundIssues.length > 0 && (
         <RoundIssuesSection taskId={taskId} rounds={detail.roundIssues}/>
       )}
@@ -419,6 +406,61 @@ const RichText = ({ text }) => {
 // ---------------------------------------------------------------------------
 // Cold-load / lazy artifact subviews
 // ---------------------------------------------------------------------------
+
+// Render a per-task artifact file section. If the inlined snapshot already
+// supplied `body`, use it. Otherwise lazily fetch via useArtifact and show
+// loading / missing / error states.
+const TaskFileSection = ({ label, taskId, kind, body }) => {
+  // Only fetch when the snapshot didn't inline a body — saves a round-trip.
+  const entry = useArtifact(body === undefined ? kind : null, body === undefined ? { taskId } : null);
+  return (
+    <>
+      <SectionH>{label}</SectionH>
+      {body !== undefined && body !== ''
+        ? <PreBlock text={body}/>
+        : <TaskFilePlaceholder body={body} entry={entry}/>}
+    </>
+  );
+};
+
+// State machine for the placeholder slot when no body has arrived yet.
+//   - undefined entry / loading → spinner row
+//   - loaded with no body → "missing" row with file icon
+//   - error → red row
+//   - body === '' → empty file row
+const TaskFilePlaceholder = ({ body, entry }) => {
+  if (body === '') {
+    return <PlaceholderRow icon={<I.File size={13}/>} text="(empty)"/>;
+  }
+  const status = entry?.status;
+  if (status === 'error') {
+    return <PlaceholderRow icon={<I.AlertCirc size={13}/>} text={`Error: ${entry.error}`} tone="error"/>;
+  }
+  if (status === 'loaded') {
+    return <PlaceholderRow icon={<I.FileMissing size={13}/>} text="Not present for this task" tone="missing"/>;
+  }
+  return (
+    <PlaceholderRow
+      icon={<span className="flow-spinner" aria-hidden="true" style={{ width: 11, height: 11 }}/>}
+      text="Loading…"
+    />
+  );
+};
+
+const PlaceholderRow = ({ icon, text, tone }) => {
+  const color = tone === 'error' ? 'var(--err)' : 'var(--text-4)';
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 8,
+      padding: "8px 12px", marginBottom: 12,
+      background: "var(--bg-2)", border: "1px solid var(--border-1)",
+      borderRadius: "var(--r-sm)", color, fontSize: 11.5, fontStyle: tone === 'missing' ? 'italic' : 'normal',
+    }}>
+      {icon}
+      <span>{text}</span>
+    </div>
+  );
+};
 
 const PreBlock = ({ text }) => (
   <pre style={{
