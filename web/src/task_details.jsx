@@ -246,7 +246,6 @@ const TaskDetailsPanel = ({ taskId, openLog, openLogIds = [] }) => {
                     <div style={{ fontSize: 10.5, color: "var(--text-3)", display: "flex", gap: 6, flexWrap: "wrap" }}>
                       <span>{s.model.split("-").slice(0,3).join("-")}</span>
                       {s.effort && <span style={{ color: "var(--text-4)" }}>· {s.effort}</span>}
-                      {s.thinkingMode && s.thinkingMode !== "auto" && <span style={{ color: "var(--text-4)" }}>· {s.thinkingMode}</span>}
                       <span style={{ color: "var(--text-4)" }}>· {formatK(s.tokens.input + s.tokens.output)} tok · {formatCost(s.costUsd ?? s.cost)}</span>
                     </div>
                   </div>

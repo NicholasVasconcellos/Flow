@@ -307,7 +307,6 @@ const LogColumn = ({ session, events, onClose, onExpand, collapsed, fixedWidth }
           <div style={{ color: "var(--text-4)", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", gap: 6, alignItems: "center" }}>
             {formatK(session.tokens.input + session.tokens.output)} tok · {formatCost(session.costUsd ?? session.cost)}
             {session.effort && <span>· {session.effort}</span>}
-            {session.thinkingMode && session.thinkingMode !== "auto" && <span>· {session.thinkingMode}</span>}
             {typeof session.ordinal === "number" && <span>· #{session.ordinal}</span>}
             {session.autocompacted && <span style={{ color: "var(--warn)" }}>· *compact</span>}
           </div>

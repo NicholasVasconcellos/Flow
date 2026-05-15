@@ -1,11 +1,9 @@
 import {
   ConfigSchema,
   type Config,
-  type Effort,
   type PricingEntry,
   type StageConfig,
   type StageKey,
-  type ThinkingMode,
   type TokenCounts,
 } from "./types.js";
 import { Paths } from "./paths.js";
@@ -165,49 +163,15 @@ export function resolveStageConfig(config: Config, stage: StageKey): StageConfig
   return { model, effort, stallTimeoutMs, repeatToolCallCap };
 }
 
-/**
- * Per-model effort tier table. The CLI now accepts `--effort` directly, so
- * effort is forwarded as a flag instead of being injected into the prompt.
- * `thinkingMode` is retained as session metadata for the UI.
- */
-export interface EffortResolved {
-  /** Resolved thinking-budget keyword (UI metadata only — not injected). */
-  thinkingMode: ThinkingMode;
-}
-
-const EFFORT_DEFAULT: Record<Effort, EffortResolved> = {
-  low: { thinkingMode: "off" },
-  med: { thinkingMode: "think" },
-  high: { thinkingMode: "megathink" },
-  xhigh: { thinkingMode: "ultrathink" },
-  max: { thinkingMode: "ultrathink" },
-};
-
-const EFFORT_BY_MODEL: Record<string, Record<Effort, EffortResolved>> = {
-  opus: EFFORT_DEFAULT,
-  sonnet: EFFORT_DEFAULT,
-  haiku: EFFORT_DEFAULT,
-};
-
-function modelAlias(modelString: string): string {
-  // Strip any context-window suffix like `opus[1m]` → `opus`. Then if the
-  // model is a versioned id like `claude-opus-4-5`, fall back to the family
-  // prefix lookup.
-  const base = modelString.replace(/\[[^\]]+\]$/, "");
-  if (EFFORT_BY_MODEL[base]) return base;
-  if (base.startsWith("claude-opus")) return "opus";
-  if (base.startsWith("claude-sonnet")) return "sonnet";
-  if (base.startsWith("claude-haiku")) return "haiku";
-  return base;
-}
-
-export function resolveEffort(model: string, effort: Effort): EffortResolved {
-  const alias = modelAlias(model);
-  return EFFORT_BY_MODEL[alias]?.[effort] ?? EFFORT_DEFAULT[effort];
-}
-
 export function costFor(config: Config, model: string, tokens: TokenCounts): number {
-  const rate = config.pricing[model];
+  // Try exact id first, then strip context-window suffix (`opus[1m]` → `opus`),
+  // then fall back to the family alias (`claude-opus-4-7` → `opus`).
+  const base = model.replace(/\[[^\]]+\]$/, "");
+  let alias = base;
+  if (base.startsWith("claude-opus")) alias = "opus";
+  else if (base.startsWith("claude-sonnet")) alias = "sonnet";
+  else if (base.startsWith("claude-haiku")) alias = "haiku";
+  const rate = config.pricing[model] ?? config.pricing[base] ?? config.pricing[alias];
   if (!rate) return 0;
   return (
     (tokens.input / 1_000_000) * rate.input +

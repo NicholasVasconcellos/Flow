@@ -26,9 +26,6 @@ export const TaskStageSchema = z.enum([
 ]);
 export type TaskStage = z.infer<typeof TaskStageSchema>;
 
-export const ThinkingModeSchema = z.enum(["off", "think", "megathink", "ultrathink"]);
-export type ThinkingMode = z.infer<typeof ThinkingModeSchema>;
-
 export const EffortSchema = z.enum(["low", "med", "high", "xhigh", "max"]);
 export type Effort = z.infer<typeof EffortSchema>;
 
@@ -256,7 +253,6 @@ export const SessionSchema = z.object({
   stage: SessionStageSchema,
   provider: z.literal("claude-code"),
   model: z.string(),
-  thinkingMode: ThinkingModeSchema.optional(),
   effort: EffortSchema.optional(),
   /** UI grouping — count of prior sessions for the same (taskId, stage). */
   ordinal: z.number().int().nonnegative().optional(),
@@ -371,7 +367,6 @@ export const ConfigSchema = z.object({
   defaults: z.object({
     model: z.string().default("sonnet"),
     effort: EffortSchema.default("med"),
-    thinkingMode: ThinkingModeSchema.optional(),
   }),
   stages: z
     .object({

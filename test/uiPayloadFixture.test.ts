@@ -404,7 +404,6 @@ test("flow UI payload fixture covers session metadata and stream event kinds", a
   assert.ok(sessions.some((session) => session["taskId"] === null), "missing project-level session");
   assert.ok(sessions.some((session) => "ordinal" in session), "missing ordinal session");
   assert.ok(sessions.some((session) => "effort" in session), "missing effort session");
-  assert.ok(sessions.some((session) => "thinkingMode" in session), "missing thinkingMode session");
   assert.ok(sessions.some((session) => "parentSessionId" in session), "missing parentSessionId session");
   assert.ok(sessions.some((session) => "claudeSessionId" in session), "missing claudeSessionId session");
   assert.ok(sessions.some((session) => "contextPercentage" in session), "missing contextPercentage session");

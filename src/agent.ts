@@ -6,7 +6,7 @@ import { execa, type ExecaError, type ResultPromise } from "execa";
 
 import { Paths } from "./paths.js";
 import { EventBus } from "./events.js";
-import { costFor, resolveEffort, resolveStageConfig } from "./config.js";
+import { costFor, resolveStageConfig } from "./config.js";
 import { newClaudeSessionId, newId } from "./ids.js";
 import { appendJsonl, writeJsonAtomic } from "./atomic.js";
 import type { StateStore } from "./state.js";
@@ -20,7 +20,6 @@ import type {
   StageKey,
   SurplusChild,
   TaskDef,
-  ThinkingMode,
 } from "./types.js";
 
 const execAsync = promisify(execCallback);
@@ -30,7 +29,6 @@ export interface SpawnArgs {
   stage: Session["stage"];
   skillName: string;
   model?: string;
-  thinkingMode?: ThinkingMode;
   effort?: Effort;
   extraPrompt?: string;
   worktreePath: string;
@@ -856,11 +854,6 @@ export class AgentRunner {
     const model = args.model ?? stageCfg.model ?? this.config.defaults.model;
     const effort =
       args.effort ?? stageCfg.effort ?? this.config.defaults.effort;
-    const resolved = resolveEffort(model, effort);
-    const thinkingMode =
-      args.thinkingMode ??
-      resolved.thinkingMode ??
-      this.config.defaults.thinkingMode;
 
     const ordinal =
       args.ordinal ?? this.computeOrdinal(args.taskId, args.stage as string);
@@ -869,7 +862,6 @@ export class AgentRunner {
       ...args,
       model,
       effort,
-      ...(thinkingMode ? { thinkingMode } : {}),
       ordinal,
     };
     const prompt = await composePrompt({ paths: this.paths }, promptArgs);
@@ -886,7 +878,6 @@ export class AgentRunner {
       model,
       effort,
       ordinal,
-      ...(thinkingMode ? { thinkingMode } : {}),
       skillName: args.skillName,
       prompt,
       status: "running",
