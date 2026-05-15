@@ -312,7 +312,7 @@ test("composePrompt only emits Learnings block for LEARNINGS_DRAFT stages", asyn
 // spawnAgent — happy path
 // ---------------------------------------------------------------------------
 
-test("spawnAgent happy path: emits events, writes JSONL, computes cost", async () => {
+test("spawnAgent happy path: emits events, writes JSONL, records cost", async () => {
   const root = await mkTmp();
   const spawnerHandle = makeFakeSpawner();
   const { runner, paths, bus } = makeRunner(root, spawnerHandle);
@@ -321,6 +321,7 @@ test("spawnAgent happy path: emits events, writes JSONL, computes cost", async (
 
   const usageLine = JSON.stringify({
     type: "result",
+    total_cost_usd: 0.4242,
     usage: {
       input_tokens: 1000,
       output_tokens: 500,
@@ -376,7 +377,7 @@ test("spawnAgent happy path: emits events, writes JSONL, computes cost", async (
   assert.equal(session.tokens.cacheRead, 2000);
   assert.equal(session.tokens.cacheCreate, 100);
   assert.equal(session.tokens.total, 3600);
-  assert.ok(session.costUsd > 0, "cost should be computed");
+  assert.equal(session.costUsd, 0.4242);
   assert.equal(started.length, 1);
   assert.ok(events.length >= 3, `expected >=3 events, got ${events.length}`);
   assert.equal(ended.length, 1);

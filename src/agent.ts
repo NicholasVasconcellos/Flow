@@ -6,7 +6,7 @@ import { execa, type ExecaError, type ResultPromise } from "execa";
 
 import { Paths } from "./paths.js";
 import { EventBus } from "./events.js";
-import { costFor, resolveStageConfig } from "./config.js";
+import { resolveStageConfig } from "./config.js";
 import { newClaudeSessionId, newId } from "./ids.js";
 import { appendJsonl, writeJsonAtomic } from "./atomic.js";
 import type { StateStore } from "./state.js";
@@ -371,6 +371,15 @@ function applyUsageObject(
 
 function totalTokens(acc: TokenAccumulator): number {
   return acc.input + acc.output + acc.cacheRead + acc.cacheCreate;
+}
+
+/** Read Claude Code's authoritative `total_cost_usd` off the `result` event.
+ *  Using the SDK-reported figure avoids the per-key-max drift in our local
+ *  accumulator and rot when Anthropic pricing changes. */
+function extractTotalCostUsd(payload: unknown): number | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const v = (payload as Record<string, unknown>)["total_cost_usd"];
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
 }
 
 function isCompactBoundary(payload: unknown): boolean {
@@ -1009,7 +1018,8 @@ export class AgentRunner {
       lastUpdateAt = now;
       const total = totalTokens(tokens);
       session.tokens = { ...tokens, total };
-      session.costUsd = costFor(this.config, model, session.tokens);
+      // `session.costUsd` is set elsewhere from the SDK's `total_cost_usd` —
+      // see `extractTotalCostUsd` in the stream loop. Don't recompute here.
       this.eventBus.emit("session.updated", { session: { ...session } });
       // Mirror to state.json so a sibling reader (`flow serve`) picks up token
       // and contextPercentage ticks via mtime-poll diff. Already throttled by
@@ -1183,6 +1193,17 @@ export class AgentRunner {
 
         const tokensChanged = updateTokensFromPayload(tokens, payload);
 
+        // Authoritative cost: Claude Code reports `total_cost_usd` on the
+        // `result` event (and occasionally mid-stream on synthetic error
+        // results). Mirror it onto the session as-is — see issue
+        // `cost-aggregation-discrepancy` for why local math is unreliable.
+        let costChanged = false;
+        const reportedCost = extractTotalCostUsd(payload);
+        if (typeof reportedCost === "number" && reportedCost !== session.costUsd) {
+          session.costUsd = reportedCost;
+          costChanged = true;
+        }
+
         // Live context-percentage update: per-message `usage` already arrives
         // in the mid-run stream, so populate the donut continuously. The
         // post-run probe only fires as a fallback when this never observed a
@@ -1202,7 +1223,7 @@ export class AgentRunner {
           }
         }
 
-        if (tokensChanged || contextChanged) flushUpdate(false);
+        if (tokensChanged || contextChanged || costChanged) flushUpdate(false);
 
         if (kind === "assistant_text") {
           const text = extractAssistantText(payload);
@@ -1293,9 +1314,11 @@ export class AgentRunner {
       exitCode = 1;
     }
 
-    // Final flush regardless of throttle.
+    // Final flush regardless of throttle. `session.costUsd` was populated
+    // from Claude Code's `result.total_cost_usd` during the stream — leaving
+    // it untouched here preserves the authoritative figure (or `0` if the
+    // session ended without ever emitting a result event).
     session.tokens = { ...tokens, total: totalTokens(tokens) };
-    session.costUsd = costFor(this.config, model, session.tokens);
     session.exitCode = exitCode;
     session.endedAt = this.nowFn().toISOString();
 

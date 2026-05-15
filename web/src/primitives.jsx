@@ -138,6 +138,9 @@ function formatK(n) {
   if (n >= 1_000) return (n/1_000).toFixed(n >= 10_000 ? 0 : 1) + "k";
   return String(n);
 }
-function formatCost(c) { return "$" + c.toFixed(2); }
+function formatCost(c) {
+  if (typeof c !== "number" || !Number.isFinite(c) || c === 0) return "—";
+  return "$" + c.toFixed(2);
+}
 
 export { Panel, StagePill, StatusBadge, ContextDonut, formatK, formatCost };
