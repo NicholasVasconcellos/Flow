@@ -16,7 +16,7 @@ Library docs: per library used, write `docs/<lib>/<topic>.md`. First line of eac
 
 .env: per credentialed service, empty placeholder + numbered retrieval guide as inline comments above. Don't block on missing keys. Existing .env → only add missing keys.
 
-.gitignore: tailor to stack. Existing → merge, don't clobber.
+.gitignore: tailor to stack. Existing → merge, don't clobber. Must include `.flow/screenshots/`.
 
 Map.md: hierarchical fs mirror. One line per entry. Skip .git/, node_modules/, dist/, .flow/. Walk real fs, don't invent.
 
@@ -47,6 +47,8 @@ AGENTS.md (every agent loads it):
 Allowed writes: Map.md, AGENTS.md, docs/, .gitignore, .env, .mcp.json, .flow/SetupNotes.md, <projectRoot>/.claude/skills/<tool>/SKILL.md, project manifest.
 
 Don't: ping MCPs, edit ~/.claude/skills/, block on credentials.
+
+Commit setup output as the initial commit: title `scaffold: Flow setup baseline`, summary describing what was installed and written.
 
 Done when: Map.md + AGENTS.md + .gitignore + .env + .flow/SetupNotes.md exist; docs/<lib>/ populated; tools tested or install command recorded.
 

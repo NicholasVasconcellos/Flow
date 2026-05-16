@@ -13,7 +13,7 @@ Implement.
 - Run the full test suite after.
 - Tests fail: fix implementation (not tests), re-run.
 
-If hasUI=true: do a UI check using the tools listed in SetupNotes (browser MCP, simulator skills, screenshot tooling, etc.). Capture observable evidence.
+If hasUI=true: do a UI check using the tools listed in SetupNotes (browser MCP, simulator skills, screenshot tooling, etc.). Capture observable evidence. Save screenshots under `.flow/screenshots/<task-id>/`.
 
 Completion:
 - Prefer a working complete solution over incremental perfection.
