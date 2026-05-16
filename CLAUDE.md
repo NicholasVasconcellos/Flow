@@ -53,9 +53,6 @@ Scope: things that would surprise a competent reader. Not best practices, not fr
 
 Extremely concise. Sacrifice grammar for concision. End with a list of unresolved questions, if any.
 
-## skills
-
-skill use is reccomended
 
 ## Subagents
 
